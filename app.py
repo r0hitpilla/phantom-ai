@@ -109,16 +109,23 @@ def apply_security_headers(response):
 @app.before_request
 def enforce_session_timeout():
     """Expire sessions that have been idle longer than the configured lifetime."""
-    if session.get("logged_in") and session.get("login_time"):
-        try:
-            login_time = datetime.fromisoformat(session["login_time"])
-            if datetime.utcnow() - login_time > timedelta(minutes=15):
-                session.clear()
-                flash("Your session has expired. Please log in again.", "info")
-                return redirect(url_for("login"))
-        except (ValueError, TypeError):
+    if not session.get("logged_in"):
+        return
+    try:
+        last_active_str = session.get("last_active") or session.get("login_time")
+        if not last_active_str:
+            session["last_active"] = datetime.utcnow().isoformat()
+            return
+        last_active = datetime.fromisoformat(last_active_str)
+        if datetime.utcnow() - last_active > timedelta(minutes=15):
             session.clear()
+            flash("Your session has expired. Please log in again.", "info")
             return redirect(url_for("login"))
+        # Update idle timer on every request
+        session["last_active"] = datetime.utcnow().isoformat()
+    except (ValueError, TypeError):
+        session.clear()
+        return redirect(url_for("login"))
 
 
 @app.before_request
@@ -223,23 +230,26 @@ def admin_required(f):
 @app.context_processor
 def inject_user_context():
     """Inject current_user and is_admin into all templates."""
-    user_id = session.get("user_id")
-    if user_id:
-        user = get_by_id(user_id)
-        if user:
-            return {"current_user": user, "is_admin": user["role"] == "admin"}
-    # Legacy admin session
-    if session.get("logged_in") and not session.get("user_id"):
-        return {
-            "current_user": {
-                "id": "legacy",
-                "email": session.get("username", "admin"),
-                "name": "Admin",
-                "role": "admin",
-                "provider": "password",
-            },
-            "is_admin": True,
-        }
+    try:
+        user_id = session.get("user_id")
+        if user_id:
+            user = get_by_id(user_id)
+            if user:
+                return {"current_user": user, "is_admin": user["role"] == "admin"}
+        # Legacy admin session
+        if session.get("logged_in") and not session.get("user_id"):
+            return {
+                "current_user": {
+                    "id": "legacy",
+                    "email": session.get("username", "admin"),
+                    "name": "Admin",
+                    "role": "admin",
+                    "provider": "password",
+                },
+                "is_admin": True,
+            }
+    except Exception:
+        pass
     return {"current_user": None, "is_admin": False}
 
 
@@ -404,6 +414,7 @@ def _set_user_session(user: dict):
     session["username"] = user.get("email", "")
     session["role"] = user.get("role", "user")
     session["login_time"] = datetime.utcnow().isoformat()
+    session["last_active"] = datetime.utcnow().isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -1492,9 +1503,9 @@ def server_error(e):
     traceback.print_exc()
     if request.is_json or request.path.startswith("/api/"):
         return jsonify({"error": "Internal server error"}), 500
-    # Clear session before redirecting so login doesn't loop back to the broken page
-    session.clear()
     flash("Something went wrong. Please try again.", "error")
+    if session.get("logged_in"):
+        return redirect(url_for("dashboard")), 302
     return redirect(url_for("login")), 302
 
 
