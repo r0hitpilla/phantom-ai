@@ -300,4 +300,67 @@
   </div>
 </div>
 
+<script>
+(function () {
+  const tbody = document.querySelector('.data-table tbody');
+  if (!tbody) return;
+
+  function statusBadge(job) {
+    const spinner = job.status === 'running' ? '<span class="spinner-tiny"></span>' : '';
+    return `<span class="status-badge status-${job.status}">${spinner}${job.status.toUpperCase()}</span>`;
+  }
+
+  function riskPill(score) {
+    if (score == null) return '<span class="text-muted">—</span>';
+    const cls = score >= 75 ? 'critical' : score >= 50 ? 'high' : score >= 25 ? 'medium' : 'low';
+    return `<span class="risk-score-pill ${cls}">${score}/100</span>`;
+  }
+
+  function renderRows(jobs) {
+    if (!jobs.length) return;
+    tbody.innerHTML = jobs.slice(0, 10).map(j => `
+      <tr>
+        <td><code class="job-id">${j.job_id.slice(0, 8)}...</code></td>
+        <td><span class="module-tag">${j.module || '—'}</span></td>
+        <td><span class="target-domain">${j.target || '—'}</span></td>
+        <td>${statusBadge(j)}</td>
+        <td>
+          <div class="mini-progress"><div class="mini-progress-bar" style="width:${j.progress || 0}%"></div></div>
+          <span class="progress-text">${j.progress || 0}%</span>
+        </td>
+        <td>${riskPill(j.risk_score)}</td>
+        <td><span class="timestamp">${(j.created_at || '').slice(0, 16).replace('T', ' ') || '—'}</span></td>
+        <td>${j.status === 'completed' ? `<a href="/api/report/${j.job_id}" class="btn-micro" target="_blank">PDF</a>` : '<span class="text-muted">—</span>'}</td>
+      </tr>`).join('');
+  }
+
+  async function poll() {
+    try {
+      const res = await fetch('/api/jobs');
+      if (!res.ok) return;
+      const jobs = await res.json();
+      renderRows(jobs);
+
+      // Update stat counters
+      const statCards = document.querySelectorAll('.stat-number');
+      if (statCards[0]) statCards[0].textContent = jobs.length;
+      if (statCards[1]) statCards[1].textContent = jobs.filter(j => j.status === 'completed').length;
+
+      // Keep polling only while something is still running
+      if (jobs.some(j => j.status === 'running')) {
+        setTimeout(poll, 5000);
+      }
+    } catch (_) {}
+  }
+
+  // Start immediately so navigating back shows latest state
+  poll();
+
+  // Re-poll when user switches back to this tab
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) poll();
+  });
+})();
+</script>
+
 {% endblock %}
