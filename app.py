@@ -76,7 +76,9 @@ IS_PRODUCTION = bool(
 )
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SECURE=IS_PRODUCTION,   # HTTPS-only in production
+    # Railway terminates TLS at the proxy — the app receives plain HTTP internally,
+    # so SESSION_COOKIE_SECURE=True causes the cookie to never be sent → redirect loop.
+    SESSION_COOKIE_SECURE=False,
     SESSION_COOKIE_SAMESITE="Lax",
     PERMANENT_SESSION_LIFETIME=timedelta(minutes=15),
 )
