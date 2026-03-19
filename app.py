@@ -24,6 +24,7 @@ from flask import (
     session,
     url_for,
 )
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from authlib.integrations.flask_client import OAuth
@@ -59,6 +60,12 @@ from modules.supply_chain import SupplyChainScanner
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
+
+# Trust Railway's reverse proxy so url_for() generates https:// URLs correctly
+# x_for=1  → trust 1 hop of X-Forwarded-For
+# x_proto=1 → trust X-Forwarded-Proto (http→https)
+# x_host=1  → trust X-Forwarded-Host
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 # ── Session security (OWASP A07) ──────────────────────────────────────────────
 IS_PRODUCTION = bool(
