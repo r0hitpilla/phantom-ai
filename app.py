@@ -52,6 +52,7 @@ from modules.cognitive import CognitiveProfiler
 from modules.deepfake import DeepfakeSimulator
 from modules.redteam import RedTeamAgent
 from modules.scanner import AIScanner
+from utils import job_store
 from modules.supply_chain import SupplyChainScanner
 
 # ---------------------------------------------------------------------------
@@ -157,18 +158,34 @@ def inject_csrf():
 # Global stores
 # ---------------------------------------------------------------------------
 
-# Global job store: {job_id: {status, progress, module, results, created_at}}
-jobs = {}
+# Initialise persistent store and restore state from previous runs
+job_store.init_db()
 
-# Campaign store (for deepfake module)
-campaigns = {}
+# Global job store: restored from SQLite on startup
+jobs = job_store.get_all_jobs()
 
-# Scheduled job store: {sched_id: {sched_id, module, target, run_at, status, job_id, ...}}
-scheduled_jobs = {}
+# Campaign store: restored from SQLite on startup
+campaigns = job_store.get_all_campaigns()
+
+# Scheduled job store: restored from SQLite on startup
+scheduled_jobs = job_store.get_all_scheduled_jobs()
 
 # APScheduler instance
 _scheduler = BackgroundScheduler(timezone="UTC")
 _scheduler.start()
+
+
+def _job_set(job_id, **kwargs):
+    """Update an in-memory job dict and persist to SQLite in one call."""
+    if job_id in jobs:
+        jobs[job_id].update(kwargs)
+    job_store.update_job(job_id, **kwargs)
+
+
+def _job_create(job_dict):
+    """Register a new job in memory and persist it."""
+    jobs[job_dict["job_id"]] = job_dict
+    job_store.save_job(job_dict)
 
 # ---------------------------------------------------------------------------
 # Auth helpers
@@ -482,7 +499,7 @@ def scanner_start():
         return jsonify({"error": "Domain is required"}), 400
 
     job_id = str(uuid.uuid4())
-    jobs[job_id] = {
+    _job_create({
         "job_id": job_id,
         "module": "AI Scanner",
         "target": domain,
@@ -491,12 +508,11 @@ def scanner_start():
         "results": None,
         "error": None,
         "created_at": datetime.utcnow().isoformat(),
-    }
+    })
 
     def run_scan():
         try:
             scanner = AIScanner(domain=domain, authorization_token=job_id)
-            # Attach progress updates to job
             original_log = scanner._log
 
             def patched_log(message, level="INFO"):
@@ -506,14 +522,11 @@ def scanner_start():
 
             scanner._log = patched_log
             results = scanner.run_full_scan()
-            jobs[job_id]["results"] = results
-            jobs[job_id]["status"] = "completed"
-            jobs[job_id]["progress"] = 100
+            _job_set(job_id, results=results, status="completed", progress=100)
             _notify(job_id, jobs[job_id].get("notify_email"))
         except Exception as exc:
             traceback.print_exc()
-            jobs[job_id]["status"] = "failed"
-            jobs[job_id]["error"] = str(exc)
+            _job_set(job_id, status="failed", error=str(exc))
 
     thread = threading.Thread(target=run_scan, daemon=True)
     thread.start()
@@ -577,7 +590,7 @@ def deepfake_generate():
         return jsonify({"error": "company_name and exec_name are required"}), 400
 
     job_id = str(uuid.uuid4())
-    jobs[job_id] = {
+    _job_create({
         "job_id": job_id,
         "module": "Deepfake Simulator",
         "target": company_name,
@@ -586,7 +599,7 @@ def deepfake_generate():
         "results": None,
         "error": None,
         "created_at": datetime.utcnow().isoformat(),
-    }
+    })
 
     def run_generation():
         try:
@@ -600,12 +613,9 @@ def deepfake_generate():
             scenarios = simulator.generate_scenarios()
             jobs[job_id]["progress"] = 50
 
-            # Find the scenario matching the requested type
             target_scenario = next(
                 (s for s in scenarios if s.get("type") == scenario_type), scenarios[0]
             )
-
-            # Generate script for first employee or a generic target
             sample_employee = (
                 target_employees[0]
                 if target_employees
@@ -619,7 +629,7 @@ def deepfake_generate():
 
             training_content = simulator.generate_training_content(target_scenario)
 
-            jobs[job_id]["results"] = {
+            _job_set(job_id, results={
                 "company": company_name,
                 "scenarios": scenarios,
                 "selected_scenario": target_scenario,
@@ -627,14 +637,11 @@ def deepfake_generate():
                 "email_campaign": email_campaign,
                 "training_content": training_content,
                 "generated_at": datetime.utcnow().isoformat(),
-            }
-            jobs[job_id]["status"] = "completed"
-            jobs[job_id]["progress"] = 100
+            }, status="completed", progress=100)
             _notify(job_id, jobs[job_id].get("notify_email"))
         except Exception as exc:
             traceback.print_exc()
-            jobs[job_id]["status"] = "failed"
-            jobs[job_id]["error"] = str(exc)
+            _job_set(job_id, status="failed", error=str(exc))
 
     thread = threading.Thread(target=run_generation, daemon=True)
     thread.start()
@@ -665,6 +672,7 @@ def deepfake_campaign():
     )
     campaign = simulator.create_campaign(targets, scenario_type)
     campaigns[campaign["campaign_id"]] = campaign
+    job_store.save_campaign(campaign["campaign_id"], campaign)
 
     return jsonify(campaign)
 
@@ -727,7 +735,7 @@ def redteam_start():
         return jsonify({"error": "Domain is required"}), 400
 
     job_id = str(uuid.uuid4())
-    jobs[job_id] = {
+    _job_create({
         "job_id": job_id,
         "module": "Red Team Agent",
         "target": domain,
@@ -736,7 +744,7 @@ def redteam_start():
         "results": None,
         "error": None,
         "created_at": datetime.utcnow().isoformat(),
-    }
+    })
 
     def run_redteam():
         try:
@@ -755,14 +763,11 @@ def redteam_start():
 
             agent._log = patched_log
             results = agent.run_autonomous_scan()
-            jobs[job_id]["results"] = results
-            jobs[job_id]["status"] = "completed"
-            jobs[job_id]["progress"] = 100
+            _job_set(job_id, results=results, status="completed", progress=100)
             _notify(job_id, jobs[job_id].get("notify_email"))
         except Exception as exc:
             traceback.print_exc()
-            jobs[job_id]["status"] = "failed"
-            jobs[job_id]["error"] = str(exc)
+            _job_set(job_id, status="failed", error=str(exc))
 
     thread = threading.Thread(target=run_redteam, daemon=True)
     thread.start()
@@ -822,7 +827,7 @@ def supplychain_scan():
         return jsonify({"error": "Domain is required"}), 400
 
     job_id = str(uuid.uuid4())
-    jobs[job_id] = {
+    _job_create({
         "job_id": job_id,
         "module": "Supply Chain Scanner",
         "target": domain,
@@ -831,7 +836,7 @@ def supplychain_scan():
         "results": None,
         "error": None,
         "created_at": datetime.utcnow().isoformat(),
-    }
+    })
 
     def run_scan():
         try:
@@ -846,14 +851,11 @@ def supplychain_scan():
 
             scanner._log = patched_log
             results = scanner.run_full_scan()
-            jobs[job_id]["results"] = results
-            jobs[job_id]["status"] = "completed"
-            jobs[job_id]["progress"] = 100
+            _job_set(job_id, results=results, status="completed", progress=100)
             _notify(job_id, jobs[job_id].get("notify_email"))
         except Exception as exc:
             traceback.print_exc()
-            jobs[job_id]["status"] = "failed"
-            jobs[job_id]["error"] = str(exc)
+            _job_set(job_id, status="failed", error=str(exc))
 
     thread = threading.Thread(target=run_scan, daemon=True)
     thread.start()
@@ -913,7 +915,7 @@ def cognitive_profile():
         return jsonify({"error": "company_name is required"}), 400
 
     job_id = str(uuid.uuid4())
-    jobs[job_id] = {
+    _job_create({
         "job_id": job_id,
         "module": "Cognitive Profiler",
         "target": company_name,
@@ -922,7 +924,7 @@ def cognitive_profile():
         "results": None,
         "error": None,
         "created_at": datetime.utcnow().isoformat(),
-    }
+    })
 
     def run_profiling():
         try:
@@ -940,14 +942,11 @@ def cognitive_profile():
 
             profiler._log = patched_log
             results = profiler.run_full_profiling()
-            jobs[job_id]["results"] = results
-            jobs[job_id]["status"] = "completed"
-            jobs[job_id]["progress"] = 100
+            _job_set(job_id, results=results, status="completed", progress=100)
             _notify(job_id, jobs[job_id].get("notify_email"))
         except Exception as exc:
             traceback.print_exc()
-            jobs[job_id]["status"] = "failed"
-            jobs[job_id]["error"] = str(exc)
+            _job_set(job_id, status="failed", error=str(exc))
 
     thread = threading.Thread(target=run_profiling, daemon=True)
     thread.start()
@@ -1007,7 +1006,7 @@ def appsec_start():
         return jsonify({"error": "Application URL is required"}), 400
 
     job_id = str(uuid.uuid4())
-    jobs[job_id] = {
+    _job_create({
         "job_id": job_id,
         "module": "AppSec Tester",
         "target": target_url,
@@ -1016,7 +1015,7 @@ def appsec_start():
         "results": None,
         "error": None,
         "created_at": datetime.utcnow().isoformat(),
-    }
+    })
 
     def run_scan():
         try:
@@ -1035,14 +1034,11 @@ def appsec_start():
 
             scanner._log = patched_log
             results = scanner.run_full_scan()
-            jobs[job_id]["results"] = results
-            jobs[job_id]["status"] = "completed"
-            jobs[job_id]["progress"] = 100
+            _job_set(job_id, results=results, status="completed", progress=100)
             _notify(job_id, jobs[job_id].get("notify_email"))
         except Exception as exc:
             traceback.print_exc()
-            jobs[job_id]["status"] = "failed"
-            jobs[job_id]["error"] = str(exc)
+            _job_set(job_id, status="failed", error=str(exc))
 
     thread = threading.Thread(target=run_scan, daemon=True)
     thread.start()
@@ -1341,7 +1337,7 @@ def _run_scheduled_job(sched_id: str):
         "redteam": "Red Team Agent",
         "supplychain": "Supply Chain Scanner",
     }
-    jobs[job_id] = {
+    _job_create({
         "job_id": job_id,
         "module": module_labels.get(module, module),
         "target": target,
@@ -1352,8 +1348,9 @@ def _run_scheduled_job(sched_id: str):
         "created_at": datetime.utcnow().isoformat(),
         "notify_email": notify_email,
         "sched_id": sched_id,
-    }
+    })
     sched["job_id"] = job_id
+    job_store.update_scheduled_job(sched_id, job_id=job_id, status="running")
 
     def run():
         try:
@@ -1379,16 +1376,15 @@ def _run_scheduled_job(sched_id: str):
             scanner._log = patched_log
 
             results = scanner.run_full_scan() if hasattr(scanner, "run_full_scan") else scanner.run_autonomous_scan()
-            jobs[job_id]["results"] = results
-            jobs[job_id]["status"] = "completed"
-            jobs[job_id]["progress"] = 100
+            _job_set(job_id, results=results, status="completed", progress=100)
             _notify(job_id, notify_email)
             sched["status"] = "completed"
+            job_store.update_scheduled_job(sched_id, status="completed")
         except Exception as exc:
             traceback.print_exc()
-            jobs[job_id]["status"] = "failed"
-            jobs[job_id]["error"] = str(exc)
+            _job_set(job_id, status="failed", error=str(exc))
             sched["status"] = "failed"
+            job_store.update_scheduled_job(sched_id, status="failed")
 
     threading.Thread(target=run, daemon=True).start()
 
@@ -1437,6 +1433,7 @@ def scheduler_create():
     if not run_at_str:
         # Run immediately
         scheduled_jobs[sched_id] = sched_entry
+        job_store.save_scheduled_job(sched_entry)
         _run_scheduled_job(sched_id)
         return jsonify({"sched_id": sched_id, "job_id": scheduled_jobs[sched_id].get("job_id"), "status": "started"})
 
@@ -1450,6 +1447,7 @@ def scheduler_create():
         return jsonify({"error": "Scheduled time must be in the future"}), 400
 
     scheduled_jobs[sched_id] = sched_entry
+    job_store.save_scheduled_job(sched_entry)
     _scheduler.add_job(
         _run_scheduled_job,
         trigger="date",
