@@ -244,8 +244,8 @@ def add_security_headers(response):
     h["Cross-Origin-Opener-Policy"] = "same-origin"
     h["Cross-Origin-Resource-Policy"] = "same-origin"
 
-    if IS_PRODUCTION:
-        h["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
+    # HSTS omitted — Railway's proxy enforces HTTPS at the edge.
+    # Setting it here causes redirect loops behind the proxy.
 
     # Prevent caching of authenticated/sensitive pages
     if response.content_type and "text/html" in response.content_type:
