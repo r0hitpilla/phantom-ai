@@ -1,70 +1,96 @@
 """
 Phantom AI — User Database (SQLite)
-Manages users, roles, and authentication for multi-user access.
+OWASP-hardened: Fernet-encrypted PII, HMAC email index, Werkzeug PBKDF2 passwords,
+account lockout, and audit logging.
 
 Roles:
   admin — full access, can run all scans
   user  — read-only, can view dashboard and reports, cannot run scans
 """
 
-import hashlib
 import os
 import secrets
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
+
+from werkzeug.security import check_password_hash, generate_password_hash
+
+from utils.security import decrypt_field, encrypt_field, hash_for_lookup
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "phantom_users.db")
 
+# Account lockout config (OWASP A07)
+LOCKOUT_THRESHOLD = 5          # failed attempts before lockout
+LOCKOUT_WINDOW_MINUTES = 15    # rolling window for counting failures
+LOCKOUT_DURATION_MINUTES = 30  # how long the account stays locked
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# DB connection + schema
+# ──────────────────────────────────────────────────────────────────────────────
 
 def _conn():
     c = sqlite3.connect(DB_PATH)
     c.row_factory = sqlite3.Row
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA foreign_keys=ON")
     return c
 
 
 def init_db():
     with _conn() as db:
+        # Core users table — PII encrypted at rest
         db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id            TEXT PRIMARY KEY,
-                email         TEXT UNIQUE NOT NULL,
-                name          TEXT,
+                email_enc     TEXT NOT NULL,          -- Fernet-encrypted email
+                email_hash    TEXT UNIQUE NOT NULL,   -- HMAC hash for lookups
+                name_enc      TEXT,                   -- Fernet-encrypted display name
                 provider      TEXT NOT NULL DEFAULT 'email',
-                password_hash TEXT,
-                google_sub    TEXT,
+                password_hash TEXT,                   -- Werkzeug PBKDF2
+                google_sub    TEXT UNIQUE,
                 role          TEXT NOT NULL DEFAULT 'user',
+                is_active     INTEGER NOT NULL DEFAULT 1,
+                locked_until  TEXT,
+                last_login    TEXT,
                 created_at    TEXT NOT NULL
             )
         """)
+
+        # Login attempts for brute-force detection / account lockout
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS login_attempts (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                email_hash TEXT NOT NULL,
+                ip         TEXT,
+                success    INTEGER NOT NULL DEFAULT 0,
+                ts         TEXT NOT NULL
+            )
+        """)
+
+        # Immutable audit log
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    TEXT,
+                action     TEXT NOT NULL,
+                detail     TEXT,
+                ip         TEXT,
+                ts         TEXT NOT NULL
+            )
+        """)
+
+        db.execute("CREATE INDEX IF NOT EXISTS idx_attempts_hash_ts ON login_attempts(email_hash, ts)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id)")
         db.commit()
 
 
-def _row(db, query, *args):
-    row = db.execute(query, args).fetchone()
-    return dict(row) if row else None
+# ──────────────────────────────────────────────────────────────────────────────
+# Internal helpers
+# ──────────────────────────────────────────────────────────────────────────────
 
-
-def get_by_id(user_id: str):
-    with _conn() as db:
-        return _row(db, "SELECT * FROM users WHERE id = ?", user_id)
-
-
-def get_by_email(email: str):
-    with _conn() as db:
-        return _row(db, "SELECT * FROM users WHERE email = ?", email.lower())
-
-
-def get_by_google_sub(sub: str):
-    with _conn() as db:
-        return _row(db, "SELECT * FROM users WHERE google_sub = ?", sub)
-
-
-def all_users():
-    with _conn() as db:
-        rows = db.execute(
-            "SELECT id, email, name, provider, role, created_at FROM users ORDER BY created_at DESC"
-        ).fetchall()
-        return [dict(r) for r in rows]
+def _make_id() -> str:
+    return secrets.token_hex(16)
 
 
 def _is_admin_email(email: str) -> bool:
@@ -73,89 +99,303 @@ def _is_admin_email(email: str) -> bool:
     return email.lower() in admins
 
 
-def _make_id():
-    return secrets.token_hex(16)
+def _decrypt_user(row: dict) -> dict:
+    """Decrypt encrypted fields before returning to caller."""
+    if not row:
+        return row
+    row = dict(row)
+    row["email"] = decrypt_field(row.get("email_enc", ""))
+    row["name"] = decrypt_field(row.get("name_enc", "")) or ""
+    return row
 
 
-def hash_password(password: str) -> str:
-    salt = secrets.token_hex(16)
-    h = hashlib.sha256((password + salt).encode()).hexdigest()
-    return f"{salt}:{h}"
+def _row(db, query, *args) -> dict | None:
+    row = db.execute(query, args).fetchone()
+    return dict(row) if row else None
 
 
-def check_password(password: str, stored_hash: str) -> bool:
+# ──────────────────────────────────────────────────────────────────────────────
+# Account lockout helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _record_attempt(db, email_hash: str, ip: str | None, success: bool):
+    db.execute(
+        "INSERT INTO login_attempts (email_hash, ip, success, ts) VALUES (?,?,?,?)",
+        (email_hash, ip or "unknown", 1 if success else 0, datetime.utcnow().isoformat()),
+    )
+
+
+def _recent_failures(db, email_hash: str) -> int:
+    since = (datetime.utcnow() - timedelta(minutes=LOCKOUT_WINDOW_MINUTES)).isoformat()
+    row = db.execute(
+        "SELECT COUNT(*) AS n FROM login_attempts WHERE email_hash=? AND success=0 AND ts >= ?",
+        (email_hash, since),
+    ).fetchone()
+    return row["n"] if row else 0
+
+
+def _is_locked(user: dict) -> bool:
+    locked_until = user.get("locked_until")
+    if locked_until:
+        try:
+            if datetime.utcnow() < datetime.fromisoformat(locked_until):
+                return True
+        except ValueError:
+            pass
+    return False
+
+
+def _apply_lockout_if_needed(db, user_id: str, email_hash: str):
+    failures = _recent_failures(db, email_hash)
+    if failures >= LOCKOUT_THRESHOLD:
+        until = (datetime.utcnow() + timedelta(minutes=LOCKOUT_DURATION_MINUTES)).isoformat()
+        db.execute("UPDATE users SET locked_until=? WHERE id=?", (until, user_id))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Audit logging
+# ──────────────────────────────────────────────────────────────────────────────
+
+def audit(action: str, user_id: str | None = None, detail: str | None = None, ip: str | None = None):
+    """Append an immutable audit record. Fire-and-forget — never raises."""
     try:
-        salt, h = stored_hash.split(":", 1)
-        return hashlib.sha256((password + salt).encode()).hexdigest() == h
+        with _conn() as db:
+            db.execute(
+                "INSERT INTO audit_log (user_id, action, detail, ip, ts) VALUES (?,?,?,?,?)",
+                (user_id, action, detail, ip or "unknown", datetime.utcnow().isoformat()),
+            )
+            db.commit()
     except Exception:
-        return False
+        pass
 
 
-def register_email_user(email: str, name: str, password: str):
-    """Create a new email/password user. Returns user dict or raises ValueError."""
+# ──────────────────────────────────────────────────────────────────────────────
+# Public read functions
+# ──────────────────────────────────────────────────────────────────────────────
+
+def get_by_id(user_id: str) -> dict | None:
+    with _conn() as db:
+        row = _row(db, "SELECT * FROM users WHERE id = ?", user_id)
+    return _decrypt_user(row)
+
+
+def get_by_email(email: str) -> dict | None:
+    h = hash_for_lookup(email.lower().strip())
+    with _conn() as db:
+        row = _row(db, "SELECT * FROM users WHERE email_hash = ?", h)
+    return _decrypt_user(row)
+
+
+def get_by_google_sub(sub: str) -> dict | None:
+    with _conn() as db:
+        row = _row(db, "SELECT * FROM users WHERE google_sub = ?", sub)
+    return _decrypt_user(row)
+
+
+def all_users() -> list[dict]:
+    with _conn() as db:
+        rows = db.execute(
+            "SELECT * FROM users ORDER BY created_at DESC"
+        ).fetchall()
+    return [_decrypt_user(dict(r)) for r in rows]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Registration + authentication
+# ──────────────────────────────────────────────────────────────────────────────
+
+def register_email_user(email: str, name: str, password: str) -> dict:
+    """Create a new email/password user. Raises ValueError if email already taken."""
     email = email.lower().strip()
+    email_hash = hash_for_lookup(email)
+
     if get_by_email(email):
         raise ValueError("An account with this email already exists.")
+
     role = "admin" if _is_admin_email(email) else "user"
     uid = _make_id()
+
     with _conn() as db:
         db.execute(
-            "INSERT INTO users (id, email, name, provider, password_hash, role, created_at) VALUES (?,?,?,?,?,?,?)",
-            (uid, email, name, "email", hash_password(password), role, datetime.utcnow().isoformat()),
+            """INSERT INTO users
+               (id, email_enc, email_hash, name_enc, provider, password_hash, role, created_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (
+                uid,
+                encrypt_field(email),
+                email_hash,
+                encrypt_field(name),
+                "email",
+                generate_password_hash(password),
+                role,
+                datetime.utcnow().isoformat(),
+            ),
         )
         db.commit()
+
+    audit("register", user_id=uid, detail=f"provider=email role={role}")
     return get_by_id(uid)
 
 
-def login_email_user(email: str, password: str):
-    """Validate email/password. Returns user dict or None."""
-    user = get_by_email(email.lower().strip())
-    if not user or user["provider"] != "email":
-        return None
-    if not user.get("password_hash") or not check_password(password, user["password_hash"]):
-        return None
-    return user
+def login_email_user(email: str, password: str, ip: str | None = None) -> dict | None:
+    """
+    Validate email/password with lockout enforcement.
+    Returns user dict on success, None on failure.
+    Callers should also call check_rate_limit(ip) before invoking this.
+    """
+    email = email.lower().strip()
+    email_hash = hash_for_lookup(email)
+    user = get_by_email(email)
+
+    with _conn() as db:
+        if not user or user.get("provider") != "email":
+            # Record failed attempt to non-existent account (prevents enumeration timing)
+            _record_attempt(db, email_hash, ip, success=False)
+            db.commit()
+            return None
+
+        if not user.get("is_active", 1):
+            audit("login_blocked_inactive", user_id=user["id"], ip=ip)
+            return None
+
+        if _is_locked(user):
+            audit("login_blocked_locked", user_id=user["id"], ip=ip)
+            _record_attempt(db, email_hash, ip, success=False)
+            db.commit()
+            return None
+
+        pw_hash = user.get("password_hash", "")
+        if not pw_hash or not check_password_hash(pw_hash, password):
+            _record_attempt(db, email_hash, ip, success=False)
+            _apply_lockout_if_needed(db, user["id"], email_hash)
+            db.commit()
+            audit("login_fail", user_id=user["id"], ip=ip)
+            return None
+
+        # Successful login
+        _record_attempt(db, email_hash, ip, success=True)
+        db.execute(
+            "UPDATE users SET locked_until=NULL, last_login=? WHERE id=?",
+            (datetime.utcnow().isoformat(), user["id"]),
+        )
+        db.commit()
+
+    audit("login_success", user_id=user["id"], ip=ip)
+    return get_by_id(user["id"])
 
 
-def upsert_google_user(email: str, name: str, google_sub: str):
-    """Create or update a Google OAuth user. Role is auto-set based on ADMIN_EMAILS."""
-    email = email.lower()
+def upsert_google_user(email: str, name: str, google_sub: str, ip: str | None = None) -> dict:
+    """Create or update a Google OAuth user. Role auto-set from ADMIN_EMAILS."""
+    email = email.lower().strip()
+    email_hash = hash_for_lookup(email)
     role = "admin" if _is_admin_email(email) else "user"
 
     user = get_by_google_sub(google_sub) or get_by_email(email)
     if user:
         with _conn() as db:
             db.execute(
-                "UPDATE users SET name=?, google_sub=?, role=? WHERE id=?",
-                (name, google_sub, role, user["id"]),
+                """UPDATE users
+                   SET name_enc=?, email_enc=?, email_hash=?, google_sub=?, role=?, last_login=?
+                   WHERE id=?""",
+                (
+                    encrypt_field(name),
+                    encrypt_field(email),
+                    email_hash,
+                    google_sub,
+                    role,
+                    datetime.utcnow().isoformat(),
+                    user["id"],
+                ),
             )
             db.commit()
+        audit("google_login", user_id=user["id"], ip=ip)
         return get_by_id(user["id"])
 
     uid = _make_id()
     with _conn() as db:
         db.execute(
-            "INSERT INTO users (id, email, name, provider, google_sub, role, created_at) VALUES (?,?,?,?,?,?,?)",
-            (uid, email, name, "google", google_sub, role, datetime.utcnow().isoformat()),
+            """INSERT INTO users
+               (id, email_enc, email_hash, name_enc, provider, google_sub, role, last_login, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                uid,
+                encrypt_field(email),
+                email_hash,
+                encrypt_field(name),
+                "google",
+                google_sub,
+                role,
+                datetime.utcnow().isoformat(),
+                datetime.utcnow().isoformat(),
+            ),
         )
         db.commit()
+    audit("google_register", user_id=uid, detail=f"role={role}", ip=ip)
     return get_by_id(uid)
 
 
-def delete_user(user_id: str):
+# ──────────────────────────────────────────────────────────────────────────────
+# Admin operations
+# ──────────────────────────────────────────────────────────────────────────────
+
+def delete_user(user_id: str, by_admin_id: str | None = None):
     with _conn() as db:
         db.execute("DELETE FROM users WHERE id = ?", (user_id,))
         db.commit()
+    audit("user_delete", user_id=by_admin_id, detail=f"deleted_user={user_id}")
 
 
-def update_role(user_id: str, role: str):
+def update_role(user_id: str, role: str, by_admin_id: str | None = None):
     with _conn() as db:
         db.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
         db.commit()
+    audit("role_change", user_id=by_admin_id, detail=f"target={user_id} new_role={role}")
+
+
+def deactivate_user(user_id: str, by_admin_id: str | None = None):
+    with _conn() as db:
+        db.execute("UPDATE users SET is_active = 0 WHERE id = ?", (user_id,))
+        db.commit()
+    audit("user_deactivate", user_id=by_admin_id, detail=f"target={user_id}")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Migration helper: upgrade legacy plain-text email rows
+# ──────────────────────────────────────────────────────────────────────────────
+
+def migrate_legacy_rows():
+    """
+    One-time migration: rows that still have a plain-text email in the old
+    `email` column (if any) are encrypted in-place. Safe to call multiple
+    times — skips already-migrated rows.
+    """
+    try:
+        with _conn() as db:
+            # Check if the old `email` column still exists
+            cols = [r[1] for r in db.execute("PRAGMA table_info(users)").fetchall()]
+            if "email" not in cols:
+                return
+            rows = db.execute("SELECT id, email, name FROM users WHERE email_hash IS NULL OR email_hash = ''").fetchall()
+            for r in rows:
+                plain_email = r["email"] or ""
+                plain_name = r["name"] or ""
+                db.execute(
+                    "UPDATE users SET email_enc=?, email_hash=?, name_enc=? WHERE id=?",
+                    (
+                        encrypt_field(plain_email),
+                        hash_for_lookup(plain_email.lower()),
+                        encrypt_field(plain_name),
+                        r["id"],
+                    ),
+                )
+            db.commit()
+    except Exception as e:
+        print(f"[auth_db] migration warning: {e}")
 
 
 # Initialize DB on import
 try:
     init_db()
+    migrate_legacy_rows()
 except Exception as e:
     print(f"[auth_db] DB init warning: {e}")

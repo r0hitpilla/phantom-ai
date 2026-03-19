@@ -50,17 +50,20 @@
           {% if u.id != current_user.id %}
             {% if u.role == "user" %}
               <form method="POST" action="/admin/users/{{ u.id }}/role" style="display:inline;">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}" />
                 <input type="hidden" name="role" value="admin" />
                 <button type="submit" class="btn-micro" style="background:rgba(255,62,62,0.1);color:#FF3E3E;border-color:rgba(255,62,62,0.2);">Make Admin</button>
               </form>
             {% else %}
               <form method="POST" action="/admin/users/{{ u.id }}/role" style="display:inline;">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}" />
                 <input type="hidden" name="role" value="user" />
                 <button type="submit" class="btn-micro">Revoke Admin</button>
               </form>
             {% endif %}
             <form method="POST" action="/admin/users/{{ u.id }}/delete" style="display:inline;"
               onsubmit="return confirm('Delete {{ u.email }}?')">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}" />
               <button type="submit" class="btn-micro" style="background:rgba(255,62,62,0.08);color:#FF3E3E;border-color:rgba(255,62,62,0.2);">Delete</button>
             </form>
           {% else %}

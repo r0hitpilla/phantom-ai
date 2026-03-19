@@ -10,3 +10,5 @@ fpdf2
 apscheduler
 httpx
 beautifulsoup4
+cryptography
+werkzeug

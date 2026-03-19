@@ -10,7 +10,7 @@ import os
 import threading
 import traceback
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 
 from flask import (
@@ -30,11 +30,23 @@ from authlib.integrations.flask_client import OAuth
 from config import SECRET_KEY
 from modules.appsec import AppSecScanner
 from utils.auth_db import (
-    all_users, check_password, delete_user, get_by_email,
-    get_by_id, login_email_user, register_email_user, update_role,
+    all_users, audit, delete_user, get_by_id,
+    login_email_user, register_email_user, update_role,
     upsert_google_user,
 )
 from utils.emailer import notifier
+from utils.security import (
+    add_security_headers,
+    check_rate_limit,
+    generate_csrf_token,
+    get_client_ip,
+    is_safe_redirect_url,
+    reset_rate_limit,
+    sanitize_string,
+    validate_csrf_token,
+    validate_email,
+    validate_password_strength,
+)
 from modules.cognitive import CognitiveProfiler
 from modules.deepfake import DeepfakeSimulator
 from modules.redteam import RedTeamAgent
@@ -47,6 +59,19 @@ from modules.supply_chain import SupplyChainScanner
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
+
+# ── Session security (OWASP A07) ──────────────────────────────────────────────
+IS_PRODUCTION = bool(
+    os.environ.get("RAILWAY_ENVIRONMENT")
+    or os.environ.get("PRODUCTION")
+    or os.environ.get("RAILWAY_STATIC_URL")
+)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=IS_PRODUCTION,   # HTTPS-only in production
+    SESSION_COOKIE_SAMESITE="Lax",
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+)
 
 # ---------------------------------------------------------------------------
 # Google OAuth setup
@@ -64,6 +89,55 @@ if GOOGLE_ENABLED:
         server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
         client_kwargs={"scope": "openid email profile"},
     )
+
+# ---------------------------------------------------------------------------
+# Security hooks
+# ---------------------------------------------------------------------------
+
+@app.after_request
+def apply_security_headers(response):
+    return add_security_headers(response)
+
+
+@app.before_request
+def enforce_session_timeout():
+    """Expire sessions that have been idle longer than the configured lifetime."""
+    if session.get("logged_in") and session.get("login_time"):
+        try:
+            login_time = datetime.fromisoformat(session["login_time"])
+            if datetime.utcnow() - login_time > timedelta(hours=8):
+                session.clear()
+                flash("Your session has expired. Please log in again.", "info")
+                return redirect(url_for("login"))
+        except (ValueError, TypeError):
+            session.clear()
+            return redirect(url_for("login"))
+
+
+@app.before_request
+def csrf_protect():
+    """Validate CSRF token on all state-changing form submissions (non-API)."""
+    if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+        # Skip API endpoints that use JSON (protected by SameSite + auth)
+        if request.path.startswith("/api/"):
+            return
+        # Skip OAuth callbacks (no session CSRF possible there)
+        if request.path.startswith("/auth/"):
+            return
+        submitted = request.form.get("_csrf_token", "")
+        if not validate_csrf_token(session, submitted):
+            audit("csrf_fail", ip=get_client_ip(request), detail=request.path)
+            flash("Security validation failed. Please try again.", "error")
+            return redirect(request.referrer or url_for("login"))
+
+
+@app.context_processor
+def inject_csrf():
+    """Make csrf_token() available in all templates."""
+    def csrf_token():
+        return generate_csrf_token(session)
+    return {"csrf_token": csrf_token}
+
 
 # ---------------------------------------------------------------------------
 # Global stores
@@ -201,22 +275,41 @@ def login():
     if session.get("logged_in"):
         return redirect(url_for("dashboard"))
     if request.method == "POST":
-        username = request.form.get("username", "").strip()
+        ip = get_client_ip(request)
+
+        # Rate limit before any processing (OWASP A07)
+        if not check_rate_limit(ip):
+            audit("rate_limit_login", ip=ip)
+            flash("Too many login attempts. Please wait 15 minutes before trying again.", "error")
+            return render_template("login.html", google_enabled=GOOGLE_ENABLED), 429
+
+        username = sanitize_string(request.form.get("username", ""), max_length=254)
         password = request.form.get("password", "")
 
         # Legacy admin login
         if username == PHANTOM_USERNAME and password == PHANTOM_PASSWORD:
-            session["logged_in"] = True
-            session["username"] = username
-            session["login_time"] = datetime.utcnow().isoformat()
+            reset_rate_limit(ip)
+            _set_user_session({
+                "id": None, "email": username, "name": "Admin",
+                "role": "admin", "provider": "password",
+            })
+            session.pop("user_id", None)  # Mark as legacy session
+            next_url = request.args.get("next", "")
+            if next_url and is_safe_redirect_url(next_url, request.host):
+                return redirect(next_url)
             return redirect(url_for("dashboard"))
 
         # Email/password login via user DB
-        user = login_email_user(username, password)
+        user = login_email_user(username, password, ip=ip)
         if user:
+            reset_rate_limit(ip)
             _set_user_session(user)
+            next_url = request.args.get("next", "")
+            if next_url and is_safe_redirect_url(next_url, request.host):
+                return redirect(next_url)
             return redirect(url_for("dashboard"))
 
+        # Generic error — no enumeration hints
         flash("Invalid credentials. Please try again.", "error")
 
     return render_template("login.html", google_enabled=GOOGLE_ENABLED)
@@ -227,29 +320,33 @@ def register():
     if session.get("logged_in"):
         return redirect(url_for("dashboard"))
     if request.method == "POST":
-        name = request.form.get("name", "").strip()
-        email = request.form.get("email", "").strip()
+        name = sanitize_string(request.form.get("name", ""), max_length=100)
+        email = sanitize_string(request.form.get("email", ""), max_length=254)
         password = request.form.get("password", "")
         confirm = request.form.get("confirm_password", "")
 
         if not name or not email or not password:
             flash("All fields are required.", "error")
-        elif len(password) < 8:
-            flash("Password must be at least 8 characters.", "error")
-        elif password != confirm:
-            flash("Passwords do not match.", "error")
+        elif not validate_email(email):
+            flash("Please enter a valid email address.", "error")
         else:
-            try:
-                user = register_email_user(email, name, password)
-                _set_user_session(user)
-                flash(
-                    f"Welcome, {name}! Your account has been created."
-                    + (" You have admin access." if user["role"] == "admin" else " You have read-only access."),
-                    "success" if user["role"] == "admin" else "info",
-                )
-                return redirect(url_for("dashboard"))
-            except ValueError as e:
-                flash(str(e), "error")
+            pw_ok, pw_reason = validate_password_strength(password)
+            if not pw_ok:
+                flash(pw_reason, "error")
+            elif password != confirm:
+                flash("Passwords do not match.", "error")
+            else:
+                try:
+                    user = register_email_user(email, name, password)
+                    _set_user_session(user)
+                    flash(
+                        f"Welcome, {name}! Your account has been created."
+                        + (" You have admin access." if user["role"] == "admin" else " You have read-only access."),
+                        "success" if user["role"] == "admin" else "info",
+                    )
+                    return redirect(url_for("dashboard"))
+                except ValueError as e:
+                    flash(str(e), "error")
 
     return render_template("register.html", google_enabled=GOOGLE_ENABLED)
 
@@ -276,7 +373,7 @@ def google_callback():
         if not email:
             flash("Google login failed — no email returned.", "error")
             return redirect(url_for("login"))
-        user = upsert_google_user(email, name, sub)
+        user = upsert_google_user(email, name, sub, ip=get_client_ip(request))
         _set_user_session(user)
         return redirect(url_for("dashboard"))
     except Exception as exc:
@@ -292,10 +389,13 @@ def logout():
 
 
 def _set_user_session(user: dict):
+    # Session regeneration on login — prevents session fixation (OWASP A07)
+    session.clear()
+    session.permanent = True
     session["logged_in"] = True
-    session["user_id"] = user["id"]
-    session["username"] = user["email"]
-    session["role"] = user["role"]
+    session["user_id"] = user.get("id")
+    session["username"] = user.get("email", "")
+    session["role"] = user.get("role", "user")
     session["login_time"] = datetime.utcnow().isoformat()
 
 
@@ -1156,7 +1256,7 @@ def admin_set_role(user_id):
     if role not in ("admin", "user"):
         flash("Invalid role.", "error")
     else:
-        update_role(user_id, role)
+        update_role(user_id, role, by_admin_id=session.get("user_id"))
         flash(f"Role updated to {role}.", "success")
     return redirect(url_for("admin_users"))
 
@@ -1169,7 +1269,7 @@ def admin_delete_user(user_id):
     if user_id == current_uid:
         flash("You cannot delete your own account.", "error")
     else:
-        delete_user(user_id)
+        delete_user(user_id, by_admin_id=current_uid)
         flash("User deleted.", "success")
     return redirect(url_for("admin_users"))
 
@@ -1380,7 +1480,8 @@ def not_found(e):
 
 @app.errorhandler(500)
 def server_error(e):
-    return jsonify({"error": "Internal server error", "details": str(e)}), 500
+    traceback.print_exc()
+    return jsonify({"error": "Internal server error"}), 500
 
 
 # ---------------------------------------------------------------------------
