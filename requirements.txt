@@ -1,0 +1,11 @@
+flask
+anthropic
+requests
+dnspython
+python-whois
+python-dotenv
+gunicorn
+fpdf2
+schedule
+httpx
+beautifulsoup4

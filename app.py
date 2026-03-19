@@ -1,0 +1,878 @@
+"""
+PHANTOM AI — Main Flask Application
+Authorized Security Testing Platform
+For use only on systems you own or have written authorization to test.
+"""
+
+import io
+import json
+import os
+import threading
+import traceback
+import uuid
+from datetime import datetime
+from functools import wraps
+
+from flask import (
+    Flask,
+    Response,
+    flash,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
+
+from config import SECRET_KEY
+from modules.cognitive import CognitiveProfiler
+from modules.deepfake import DeepfakeSimulator
+from modules.redteam import RedTeamAgent
+from modules.scanner import AIScanner
+from modules.supply_chain import SupplyChainScanner
+
+# ---------------------------------------------------------------------------
+# App setup
+# ---------------------------------------------------------------------------
+
+app = Flask(__name__)
+app.secret_key = SECRET_KEY
+
+# Global job store: {job_id: {status, progress, module, results, created_at}}
+jobs = {}
+
+# Campaign store (for deepfake module)
+campaigns = {}
+
+# ---------------------------------------------------------------------------
+# Auth helpers
+# ---------------------------------------------------------------------------
+
+PHANTOM_PASSWORD = os.environ.get("PHANTOM_PASSWORD", "phantom2024")
+PHANTOM_USERNAME = "admin"
+
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("logged_in"):
+            return redirect(url_for("login"))
+        return f(*args, **kwargs)
+    return decorated
+
+
+def authorization_required(f):
+    """Decorator that checks for authorization token in POST body."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        data = request.get_json(silent=True) or {}
+        authorized = data.get("authorized", False)
+        if not authorized:
+            return jsonify({
+                "error": "Authorization required",
+                "message": (
+                    "You must confirm you own or have written authorization to test "
+                    "the target system. Check the authorization checkbox and retry."
+                ),
+            }), 403
+        return f(*args, **kwargs)
+    return decorated
+
+
+# ---------------------------------------------------------------------------
+# Auth routes
+# ---------------------------------------------------------------------------
+
+@app.route("/")
+def index():
+    if session.get("logged_in"):
+        return redirect(url_for("dashboard"))
+    return redirect(url_for("login"))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+        if username == PHANTOM_USERNAME and password == PHANTOM_PASSWORD:
+            session["logged_in"] = True
+            session["username"] = username
+            session["login_time"] = datetime.utcnow().isoformat()
+            return redirect(url_for("dashboard"))
+        flash("Invalid credentials. Please try again.", "error")
+    return render_template("login.html")
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+
+# ---------------------------------------------------------------------------
+# Dashboard
+# ---------------------------------------------------------------------------
+
+@app.route("/dashboard")
+@login_required
+def dashboard():
+    recent_jobs = sorted(
+        [
+            {
+                "job_id": jid,
+                "module": jdata.get("module", "Unknown"),
+                "target": jdata.get("target", "Unknown"),
+                "status": jdata.get("status", "Unknown"),
+                "progress": jdata.get("progress", 0),
+                "created_at": jdata.get("created_at", ""),
+                "risk_score": jdata.get("results", {}).get("risk_score", None)
+                if jdata.get("results")
+                else None,
+            }
+            for jid, jdata in jobs.items()
+        ],
+        key=lambda x: x["created_at"],
+        reverse=True,
+    )[:10]
+
+    stats = {
+        "total_scans": len(jobs),
+        "completed_scans": sum(1 for j in jobs.values() if j.get("status") == "completed"),
+        "critical_findings": sum(
+            1
+            for j in jobs.values()
+            if j.get("results", {}).get("risk_score", 0) >= 75
+        ),
+        "companies_protected": len(set(j.get("target", "") for j in jobs.values() if j.get("target"))),
+    }
+
+    return render_template(
+        "dashboard.html",
+        recent_jobs=recent_jobs,
+        stats=stats,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Module 1 — AI Attack Surface Scanner
+# ---------------------------------------------------------------------------
+
+@app.route("/module/scanner")
+@login_required
+def module_scanner():
+    return render_template("scanner.html")
+
+
+@app.route("/api/scanner/start", methods=["POST"])
+@login_required
+@authorization_required
+def scanner_start():
+    data = request.get_json(silent=True) or {}
+    domain = data.get("domain", "").strip()
+    if not domain:
+        return jsonify({"error": "Domain is required"}), 400
+
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {
+        "job_id": job_id,
+        "module": "AI Scanner",
+        "target": domain,
+        "status": "running",
+        "progress": 0,
+        "results": None,
+        "error": None,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+
+    def run_scan():
+        try:
+            scanner = AIScanner(domain=domain, authorization_token=job_id)
+            # Attach progress updates to job
+            original_log = scanner._log
+
+            def patched_log(message, level="INFO"):
+                original_log(message, level)
+                jobs[job_id]["progress"] = scanner.progress
+                jobs[job_id]["progress_log"] = scanner.progress_log
+
+            scanner._log = patched_log
+            results = scanner.run_full_scan()
+            jobs[job_id]["results"] = results
+            jobs[job_id]["status"] = "completed"
+            jobs[job_id]["progress"] = 100
+        except Exception as exc:
+            traceback.print_exc()
+            jobs[job_id]["status"] = "failed"
+            jobs[job_id]["error"] = str(exc)
+
+    thread = threading.Thread(target=run_scan, daemon=True)
+    thread.start()
+
+    return jsonify({"job_id": job_id, "status": "started"})
+
+
+@app.route("/api/scanner/status/<job_id>")
+@login_required
+def scanner_status(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify({
+        "job_id": job_id,
+        "status": job["status"],
+        "progress": job.get("progress", 0),
+        "progress_log": job.get("progress_log", [])[-10:],
+        "error": job.get("error"),
+    })
+
+
+@app.route("/api/scanner/results/<job_id>")
+@login_required
+def scanner_results(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    if job["status"] != "completed":
+        return jsonify({
+            "error": "Scan not yet completed",
+            "status": job["status"],
+            "progress": job.get("progress", 0),
+        }), 202
+    return jsonify(job["results"])
+
+
+# ---------------------------------------------------------------------------
+# Module 2 — Deepfake Social Engineering Simulation
+# ---------------------------------------------------------------------------
+
+@app.route("/module/deepfake")
+@login_required
+def module_deepfake():
+    return render_template("deepfake.html", campaigns=list(campaigns.values()))
+
+
+@app.route("/api/deepfake/generate", methods=["POST"])
+@login_required
+@authorization_required
+def deepfake_generate():
+    data = request.get_json(silent=True) or {}
+    company_name = data.get("company_name", "").strip()
+    exec_name = data.get("exec_name", "").strip()
+    exec_title = data.get("exec_title", "").strip()
+    target_employees = data.get("target_employees", [])
+    scenario_type = data.get("scenario_type", "credential_reset")
+
+    if not company_name or not exec_name:
+        return jsonify({"error": "company_name and exec_name are required"}), 400
+
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {
+        "job_id": job_id,
+        "module": "Deepfake Simulator",
+        "target": company_name,
+        "status": "running",
+        "progress": 0,
+        "results": None,
+        "error": None,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+
+    def run_generation():
+        try:
+            simulator = DeepfakeSimulator(
+                company_name=company_name,
+                target_employees=target_employees,
+                exec_name=exec_name,
+                exec_title=exec_title,
+            )
+            jobs[job_id]["progress"] = 20
+            scenarios = simulator.generate_scenarios()
+            jobs[job_id]["progress"] = 50
+
+            # Find the scenario matching the requested type
+            target_scenario = next(
+                (s for s in scenarios if s.get("type") == scenario_type), scenarios[0]
+            )
+
+            # Generate script for first employee or a generic target
+            sample_employee = (
+                target_employees[0]
+                if target_employees
+                else {"name": "Target Employee", "title": "Staff Member", "department": "General"}
+            )
+            call_script = simulator.generate_call_script(target_scenario, sample_employee)
+            jobs[job_id]["progress"] = 75
+
+            email_campaign = simulator.generate_email_campaign(target_scenario)
+            jobs[job_id]["progress"] = 90
+
+            training_content = simulator.generate_training_content(target_scenario)
+
+            jobs[job_id]["results"] = {
+                "company": company_name,
+                "scenarios": scenarios,
+                "selected_scenario": target_scenario,
+                "call_script": call_script,
+                "email_campaign": email_campaign,
+                "training_content": training_content,
+                "generated_at": datetime.utcnow().isoformat(),
+            }
+            jobs[job_id]["status"] = "completed"
+            jobs[job_id]["progress"] = 100
+        except Exception as exc:
+            traceback.print_exc()
+            jobs[job_id]["status"] = "failed"
+            jobs[job_id]["error"] = str(exc)
+
+    thread = threading.Thread(target=run_generation, daemon=True)
+    thread.start()
+
+    return jsonify({"job_id": job_id, "status": "started"})
+
+
+@app.route("/api/deepfake/campaign", methods=["POST"])
+@login_required
+@authorization_required
+def deepfake_campaign():
+    data = request.get_json(silent=True) or {}
+    company_name = data.get("company_name", "").strip()
+    exec_name = data.get("exec_name", "").strip()
+    exec_title = data.get("exec_title", "CEO").strip()
+    targets = data.get("targets", [])
+    scenario_type = data.get("scenario_type", "credential_reset")
+
+    if not company_name or not targets:
+        return jsonify({"error": "company_name and targets are required"}), 400
+
+    simulator = DeepfakeSimulator(
+        company_name=company_name,
+        target_employees=targets,
+        exec_name=exec_name,
+        exec_title=exec_title,
+    )
+    campaign = simulator.create_campaign(targets, scenario_type)
+    campaigns[campaign["campaign_id"]] = campaign
+
+    return jsonify(campaign)
+
+
+@app.route("/api/deepfake/campaigns")
+@login_required
+def deepfake_campaigns():
+    return jsonify(list(campaigns.values()))
+
+
+@app.route("/api/deepfake/status/<job_id>")
+@login_required
+def deepfake_status(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify({
+        "job_id": job_id,
+        "status": job["status"],
+        "progress": job.get("progress", 0),
+        "error": job.get("error"),
+    })
+
+
+@app.route("/api/deepfake/results/<job_id>")
+@login_required
+def deepfake_results(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    if job["status"] != "completed":
+        return jsonify({
+            "status": job["status"],
+            "progress": job.get("progress", 0),
+        }), 202
+    return jsonify(job["results"])
+
+
+# ---------------------------------------------------------------------------
+# Module 3 — Autonomous AI Red Team Agent
+# ---------------------------------------------------------------------------
+
+@app.route("/module/redteam")
+@login_required
+def module_redteam():
+    return render_template("redteam.html")
+
+
+@app.route("/api/redteam/start", methods=["POST"])
+@login_required
+@authorization_required
+def redteam_start():
+    data = request.get_json(silent=True) or {}
+    domain = data.get("domain", "").strip()
+    industry = data.get("industry", "Technology")
+    employee_count = data.get("employee_count", "100-500")
+
+    if not domain:
+        return jsonify({"error": "Domain is required"}), 400
+
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {
+        "job_id": job_id,
+        "module": "Red Team Agent",
+        "target": domain,
+        "status": "running",
+        "progress": 0,
+        "results": None,
+        "error": None,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+
+    def run_redteam():
+        try:
+            agent = RedTeamAgent(
+                company_domain=domain,
+                industry=industry,
+                employee_count=employee_count,
+            )
+
+            original_log = agent._log
+
+            def patched_log(message, level="INFO"):
+                original_log(message, level)
+                jobs[job_id]["progress"] = agent.progress
+                jobs[job_id]["progress_log"] = agent.progress_log
+
+            agent._log = patched_log
+            results = agent.run_autonomous_scan()
+            jobs[job_id]["results"] = results
+            jobs[job_id]["status"] = "completed"
+            jobs[job_id]["progress"] = 100
+        except Exception as exc:
+            traceback.print_exc()
+            jobs[job_id]["status"] = "failed"
+            jobs[job_id]["error"] = str(exc)
+
+    thread = threading.Thread(target=run_redteam, daemon=True)
+    thread.start()
+
+    return jsonify({"job_id": job_id, "status": "started"})
+
+
+@app.route("/api/redteam/status/<job_id>")
+@login_required
+def redteam_status(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify({
+        "job_id": job_id,
+        "status": job["status"],
+        "progress": job.get("progress", 0),
+        "progress_log": job.get("progress_log", [])[-10:],
+        "error": job.get("error"),
+    })
+
+
+@app.route("/api/redteam/results/<job_id>")
+@login_required
+def redteam_results(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    if job["status"] != "completed":
+        return jsonify({
+            "status": job["status"],
+            "progress": job.get("progress", 0),
+        }), 202
+    return jsonify(job["results"])
+
+
+# ---------------------------------------------------------------------------
+# Module 4 — AI Supply Chain Attack Simulator
+# ---------------------------------------------------------------------------
+
+@app.route("/module/supplychain")
+@login_required
+def module_supplychain():
+    return render_template("supplychain.html")
+
+
+@app.route("/api/supplychain/scan", methods=["POST"])
+@login_required
+@authorization_required
+def supplychain_scan():
+    data = request.get_json(silent=True) or {}
+    domain = data.get("domain", "").strip()
+    known_ai_tools = data.get("known_ai_tools", [])
+
+    if not domain:
+        return jsonify({"error": "Domain is required"}), 400
+
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {
+        "job_id": job_id,
+        "module": "Supply Chain Scanner",
+        "target": domain,
+        "status": "running",
+        "progress": 0,
+        "results": None,
+        "error": None,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+
+    def run_scan():
+        try:
+            scanner = SupplyChainScanner(domain=domain, known_ai_tools=known_ai_tools)
+
+            original_log = scanner._log
+
+            def patched_log(message, level="INFO"):
+                original_log(message, level)
+                jobs[job_id]["progress"] = scanner.progress
+                jobs[job_id]["progress_log"] = scanner.progress_log
+
+            scanner._log = patched_log
+            results = scanner.run_full_scan()
+            jobs[job_id]["results"] = results
+            jobs[job_id]["status"] = "completed"
+            jobs[job_id]["progress"] = 100
+        except Exception as exc:
+            traceback.print_exc()
+            jobs[job_id]["status"] = "failed"
+            jobs[job_id]["error"] = str(exc)
+
+    thread = threading.Thread(target=run_scan, daemon=True)
+    thread.start()
+
+    return jsonify({"job_id": job_id, "status": "started"})
+
+
+@app.route("/api/supplychain/status/<job_id>")
+@login_required
+def supplychain_status(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify({
+        "job_id": job_id,
+        "status": job["status"],
+        "progress": job.get("progress", 0),
+        "progress_log": job.get("progress_log", [])[-10:],
+        "error": job.get("error"),
+    })
+
+
+@app.route("/api/supplychain/results/<job_id>")
+@login_required
+def supplychain_results(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    if job["status"] != "completed":
+        return jsonify({
+            "status": job["status"],
+            "progress": job.get("progress", 0),
+        }), 202
+    return jsonify(job["results"])
+
+
+# ---------------------------------------------------------------------------
+# Module 5 — Cognitive Attack Profiling
+# ---------------------------------------------------------------------------
+
+@app.route("/module/cognitive")
+@login_required
+def module_cognitive():
+    return render_template("cognitive.html")
+
+
+@app.route("/api/cognitive/profile", methods=["POST"])
+@login_required
+@authorization_required
+def cognitive_profile():
+    data = request.get_json(silent=True) or {}
+    company_name = data.get("company_name", "").strip()
+    employees_data = data.get("employees", [])
+
+    if not company_name:
+        return jsonify({"error": "company_name is required"}), 400
+
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {
+        "job_id": job_id,
+        "module": "Cognitive Profiler",
+        "target": company_name,
+        "status": "running",
+        "progress": 0,
+        "results": None,
+        "error": None,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+
+    def run_profiling():
+        try:
+            profiler = CognitiveProfiler(
+                company_name=company_name,
+                employees_data=employees_data,
+            )
+
+            original_log = profiler._log
+
+            def patched_log(message, level="INFO"):
+                original_log(message, level)
+                jobs[job_id]["progress"] = profiler.progress
+                jobs[job_id]["progress_log"] = profiler.progress_log
+
+            profiler._log = patched_log
+            results = profiler.run_full_profiling()
+            jobs[job_id]["results"] = results
+            jobs[job_id]["status"] = "completed"
+            jobs[job_id]["progress"] = 100
+        except Exception as exc:
+            traceback.print_exc()
+            jobs[job_id]["status"] = "failed"
+            jobs[job_id]["error"] = str(exc)
+
+    thread = threading.Thread(target=run_profiling, daemon=True)
+    thread.start()
+
+    return jsonify({"job_id": job_id, "status": "started"})
+
+
+@app.route("/api/cognitive/status/<job_id>")
+@login_required
+def cognitive_status(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify({
+        "job_id": job_id,
+        "status": job["status"],
+        "progress": job.get("progress", 0),
+        "progress_log": job.get("progress_log", [])[-10:],
+        "error": job.get("error"),
+    })
+
+
+@app.route("/api/cognitive/results/<job_id>")
+@login_required
+def cognitive_results(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    if job["status"] != "completed":
+        return jsonify({
+            "status": job["status"],
+            "progress": job.get("progress", 0),
+        }), 202
+    return jsonify(job["results"])
+
+
+# ---------------------------------------------------------------------------
+# Reports
+# ---------------------------------------------------------------------------
+
+@app.route("/api/report/<job_id>")
+@login_required
+def generate_report(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    if job["status"] != "completed":
+        return jsonify({"error": "Scan not yet completed"}), 202
+
+    try:
+        from fpdf import FPDF
+
+        results = job.get("results", {})
+        module = job.get("module", "Security Assessment")
+        target = job.get("target", "Unknown")
+        created_at = job.get("created_at", datetime.utcnow().isoformat())
+
+        pdf = FPDF()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.add_page()
+
+        # Header
+        pdf.set_font("Helvetica", "B", 20)
+        pdf.set_fill_color(10, 14, 26)
+        pdf.set_text_color(255, 62, 62)
+        pdf.cell(0, 12, "PHANTOM AI", new_x="LMARGIN", new_y="NEXT", align="C")
+
+        pdf.set_font("Helvetica", "B", 14)
+        pdf.set_text_color(0, 212, 255)
+        pdf.cell(0, 8, f"Security Assessment Report — {module}", new_x="LMARGIN", new_y="NEXT", align="C")
+
+        pdf.ln(4)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.set_text_color(150, 150, 150)
+        pdf.cell(0, 6, f"Target: {target}  |  Date: {created_at[:10]}  |  Job ID: {job_id}", new_x="LMARGIN", new_y="NEXT", align="C")
+
+        # Authorization banner
+        pdf.ln(4)
+        pdf.set_fill_color(255, 62, 62)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.cell(0, 8, "FOR AUTHORIZED SECURITY TESTING ONLY — CONFIDENTIAL", new_x="LMARGIN", new_y="NEXT", align="C", fill=True)
+
+        pdf.ln(6)
+        pdf.set_text_color(30, 30, 30)
+
+        # Risk Score
+        risk_score = results.get("risk_score", results.get("overall_vulnerability_score", 0))
+        if risk_score:
+            pdf.set_font("Helvetica", "B", 13)
+            pdf.set_text_color(200, 0, 0) if risk_score >= 75 else pdf.set_text_color(200, 100, 0) if risk_score >= 50 else pdf.set_text_color(0, 150, 80)
+            pdf.cell(0, 10, f"Overall Risk Score: {risk_score}/100", new_x="LMARGIN", new_y="NEXT")
+            pdf.set_text_color(30, 30, 30)
+
+        # Executive Summary / Findings
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 8, "Executive Summary", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 10)
+
+        findings_text = (
+            results.get("findings_summary")
+            or results.get("findings")
+            or results.get("narrative_report")
+            or results.get("profiling_report")
+            or "See detailed results for full findings."
+        )
+        # Sanitize text for PDF (remove markdown)
+        findings_clean = _sanitize_for_pdf(str(findings_text))
+        pdf.multi_cell(0, 5, findings_clean)
+
+        pdf.ln(6)
+
+        # Key statistics section
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 8, "Key Statistics", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 10)
+
+        stats = _extract_stats_for_pdf(results, module)
+        for stat_line in stats:
+            pdf.cell(0, 6, stat_line, new_x="LMARGIN", new_y="NEXT")
+
+        # Footer
+        pdf.ln(10)
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.set_text_color(130, 130, 130)
+        pdf.cell(
+            0, 6,
+            "PHANTOM AI — This report is confidential and for authorized security testing use only.",
+            new_x="LMARGIN", new_y="NEXT", align="C"
+        )
+
+        # Generate PDF bytes
+        pdf_bytes = pdf.output()
+        return Response(
+            pdf_bytes,
+            mimetype="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="phantom-ai-report-{job_id[:8]}.pdf"'
+            },
+        )
+
+    except ImportError:
+        # fpdf2 not available — return JSON report
+        return jsonify({
+            "message": "PDF generation requires fpdf2. Install it with: pip install fpdf2",
+            "report_data": job.get("results", {}),
+        })
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({"error": f"Report generation failed: {exc}"}), 500
+
+
+# ---------------------------------------------------------------------------
+# API — Job listing
+# ---------------------------------------------------------------------------
+
+@app.route("/api/jobs")
+@login_required
+def list_jobs():
+    job_list = [
+        {
+            "job_id": jid,
+            "module": jdata.get("module"),
+            "target": jdata.get("target"),
+            "status": jdata.get("status"),
+            "progress": jdata.get("progress", 0),
+            "created_at": jdata.get("created_at"),
+        }
+        for jid, jdata in jobs.items()
+    ]
+    job_list.sort(key=lambda x: x["created_at"], reverse=True)
+    return jsonify(job_list)
+
+
+# ---------------------------------------------------------------------------
+# Error handlers
+# ---------------------------------------------------------------------------
+
+@app.errorhandler(404)
+def not_found(e):
+    return render_template("404.html") if os.path.exists("templates/404.html") else (
+        jsonify({"error": "Not found"}), 404
+    )
+
+
+@app.errorhandler(500)
+def server_error(e):
+    return jsonify({"error": "Internal server error", "details": str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------------------------
+
+def _sanitize_for_pdf(text: str) -> str:
+    """Remove markdown and non-latin characters for PDF rendering."""
+    import re
+    text = re.sub(r"#{1,6}\s*", "", text)
+    text = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", text)
+    text = re.sub(r"`{1,3}[^`]*`{1,3}", "", text)
+    text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", text)
+    # Replace non-latin1 characters with closest ASCII equivalent or space
+    result = []
+    for char in text:
+        try:
+            char.encode("latin-1")
+            result.append(char)
+        except UnicodeEncodeError:
+            result.append(" ")
+    return "".join(result)[:3000]  # Limit length
+
+
+def _extract_stats_for_pdf(results: dict, module: str) -> list:
+    """Extract key statistics as formatted strings for PDF."""
+    stats = []
+    if module == "AI Scanner":
+        stats.append(f"AI Endpoints Discovered: {len(results.get('ai_systems', []))}")
+        stats.append(f"Accessible Without Auth: {sum(1 for s in results.get('ai_systems', []) if s.get('accessible'))}")
+        stats.append(f"Prompt Injection Vulns: {sum(1 for i in results.get('prompt_injection', []) if i.get('vulnerable'))}")
+        stats.append(f"Subdomains Found: {len(results.get('subdomains', []))}")
+    elif module == "Red Team Agent":
+        stats.append(f"Attack Chains Generated: {len(results.get('attack_chains', []))}")
+        stats.append(f"Subdomains Enumerated: {len(results.get('osint', {}).get('subdomains', []))}")
+        stats.append(f"Technologies Detected: {len(results.get('company_profile', {}).get('technologies', []))}")
+    elif module == "Supply Chain Scanner":
+        stats.append(f"AI Dependencies Detected: {len(results.get('dependencies', []))}")
+        stats.append(f"Prompt Leakage Tests: {len(results.get('leakage_tests', []))}")
+        stats.append(f"Provenance Checks: {len(results.get('provenance_checks', []))}")
+    elif module == "Cognitive Profiler":
+        stats.append(f"Employees Profiled: {len(results.get('profiles', []))}")
+        stats.append(f"High-Value Targets: {sum(1 for p in results.get('profiles', []) if p.get('high_value_target'))}")
+        stats.append(f"Overall Vulnerability Score: {results.get('overall_vulnerability_score', 0)}/100")
+        critical = sum(1 for p in results.get('profiles', []) if p.get('training_priority') == 'CRITICAL')
+        stats.append(f"Critical Training Priority: {critical} employees")
+    return stats
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    debug = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
+    app.run(host="0.0.0.0", port=port, debug=debug)

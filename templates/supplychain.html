@@ -1,0 +1,358 @@
+{% extends "base.html" %}
+
+{% block title %}AI Supply Chain Attack Simulator{% endblock %}
+{% block breadcrumb %}<span>Modules</span> <span class="bc-sep">›</span> <span class="bc-active">Supply Chain</span>{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+  <div class="page-header-icon medium">⬡</div>
+  <div class="page-header-text">
+    <h1 class="page-title">AI Supply Chain Attack Simulator <span class="module-num-tag">MODULE 04</span></h1>
+    <p class="page-desc">Detect AI dependencies, verify model provenance, test for prompt leakage, and simulate supply chain poisoning attacks against authorized targets.</p>
+  </div>
+</div>
+
+<!-- Setup Card -->
+<div class="card" id="sc-setup-card">
+  <div class="card-header">
+    <h2 class="card-title">Supply Chain Scan Setup</h2>
+    <span class="card-badge medium">AUTHORIZATION REQUIRED</span>
+  </div>
+  <div class="card-body">
+    <div class="form-row">
+      <div class="form-group flex-2">
+        <label class="form-label">Target Domain</label>
+        <input type="text" id="sc-domain" class="form-input font-mono" placeholder="company.com" />
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Known AI Tools Used (optional — one per line)</label>
+      <textarea
+        id="sc-known-tools"
+        class="form-input form-textarea font-mono"
+        rows="4"
+        placeholder="OpenAI&#10;LangChain&#10;Hugging Face&#10;AWS Bedrock"
+      ></textarea>
+      <div class="form-hint">List any AI services or frameworks you know the target uses. This improves detection accuracy.</div>
+    </div>
+
+    <div class="auth-checkbox-wrap">
+      <label class="checkbox-label">
+        <input type="checkbox" id="sc-auth-confirm" class="checkbox-input" />
+        <span class="checkbox-custom"></span>
+        <span class="checkbox-text">
+          <strong>I confirm I have authorization to test the AI supply chain of this domain.</strong>
+          Active testing will send requests to detected AI endpoints.
+        </span>
+      </label>
+    </div>
+
+    <button class="btn btn-primary btn-scan" onclick="startScScan()">
+      <span class="btn-scan-text">SCAN SUPPLY CHAIN</span>
+      <span class="btn-scan-line"></span>
+    </button>
+  </div>
+</div>
+
+<!-- Progress -->
+<div class="card hidden" id="sc-progress-card">
+  <div class="card-header">
+    <h2 class="card-title"><span class="spinner-small"></span> Supply Chain Analysis In Progress</h2>
+    <span class="card-badge" id="sc-progress-pct">0%</span>
+  </div>
+  <div class="card-body">
+    <div class="progress-bar-wrap">
+      <div class="progress-bar scanning" id="sc-progress-bar" style="width:0%"></div>
+    </div>
+    <div class="terminal-box" id="sc-terminal"></div>
+  </div>
+</div>
+
+<!-- Results -->
+<div class="hidden" id="sc-results">
+
+  <!-- Risk Score -->
+  <div class="risk-hero-card" id="sc-risk-hero">
+    <div class="risk-hero-left">
+      <div class="risk-score-circle" id="sc-risk-circle">
+        <div class="risk-score-num" id="sc-risk-num">—</div>
+        <div class="risk-score-label">/ 100</div>
+      </div>
+    </div>
+    <div class="risk-hero-right">
+      <h2 class="risk-hero-title">Supply Chain Risk Score</h2>
+      <div class="risk-hero-domain" id="sc-risk-domain">—</div>
+      <p class="risk-hero-summary">Based on dependency analysis, leakage tests, and provenance verification.</p>
+    </div>
+    <div class="risk-hero-actions">
+      <button class="btn btn-outline" onclick="downloadScReport()">Download Report</button>
+    </div>
+  </div>
+
+  <!-- Dependency Graph -->
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">AI Dependency Graph</h2>
+      <span class="card-badge" id="dep-count">0 DEPENDENCIES</span>
+    </div>
+    <div class="card-body">
+      <div class="dep-graph-container" id="dep-graph"></div>
+    </div>
+  </div>
+
+  <!-- Leakage Tests -->
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">Prompt Leakage Test Results</h2>
+      <span class="card-badge critical" id="leakage-count">0 VULNERABILITIES</span>
+    </div>
+    <div class="card-body" id="leakage-results"></div>
+  </div>
+
+  <!-- Provenance Checks -->
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">Model Provenance Verification</h2>
+    </div>
+    <div class="card-body" id="provenance-results"></div>
+  </div>
+
+  <!-- Poisoning Tests -->
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">Backdoor Trigger Tests</h2>
+      <span class="card-badge" id="poison-count">0 SUSPICIOUS</span>
+    </div>
+    <div class="card-body" id="poison-results"></div>
+  </div>
+
+  <!-- Findings -->
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">AI-Generated Supply Chain Findings</h2>
+      <span class="card-badge">CLAUDE ANALYSIS</span>
+    </div>
+    <div class="card-body">
+      <div class="findings-text" id="sc-findings"></div>
+    </div>
+  </div>
+
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+let scJobId = null;
+let scPollInterval = null;
+const seenScLogs = new Set();
+
+function startScScan() {
+  const domain = document.getElementById("sc-domain").value.trim();
+  const authorized = document.getElementById("sc-auth-confirm").checked;
+  const toolsRaw = document.getElementById("sc-known-tools").value.trim();
+  const knownTools = toolsRaw.split("\n").map(l => l.trim()).filter(Boolean);
+
+  if (!domain) { showAlert("Domain is required.", "error"); return; }
+  if (!authorized) { showAlert("Authorization confirmation required.", "error"); return; }
+
+  document.getElementById("sc-setup-card").classList.add("hidden");
+  document.getElementById("sc-progress-card").classList.remove("hidden");
+  document.getElementById("sc-results").classList.add("hidden");
+
+  fetch("/api/supplychain/scan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ domain, known_ai_tools: knownTools, authorized: true }),
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.error) { showAlert(data.error, "error"); return; }
+    scJobId = data.job_id;
+    scPollInterval = setInterval(pollScStatus, 2500);
+  });
+}
+
+function pollScStatus() {
+  if (!scJobId) return;
+  fetch("/api/supplychain/status/" + scJobId)
+    .then(r => r.json())
+    .then(data => {
+      const pct = data.progress || 0;
+      document.getElementById("sc-progress-bar").style.width = pct + "%";
+      document.getElementById("sc-progress-pct").textContent = pct + "%";
+
+      const logs = data.progress_log || [];
+      logs.forEach(entry => {
+        const key = entry.timestamp + entry.message;
+        if (!seenScLogs.has(key)) {
+          seenScLogs.add(key);
+          const terminal = document.getElementById("sc-terminal");
+          const line = document.createElement("div");
+          line.className = "terminal-line terminal-line--" + (entry.level||"info").toLowerCase();
+          line.textContent = "[" + (entry.level||"INFO") + "] " + entry.message;
+          terminal.appendChild(line);
+          terminal.scrollTop = terminal.scrollHeight;
+        }
+      });
+
+      if (data.status === "completed") {
+        clearInterval(scPollInterval);
+        fetchScResults();
+      } else if (data.status === "failed") {
+        clearInterval(scPollInterval);
+        showAlert("Scan failed: " + (data.error||""), "error");
+        document.getElementById("sc-setup-card").classList.remove("hidden");
+        document.getElementById("sc-progress-card").classList.add("hidden");
+      }
+    });
+}
+
+function fetchScResults() {
+  fetch("/api/supplychain/results/" + scJobId)
+    .then(r => r.json())
+    .then(results => {
+      document.getElementById("sc-progress-card").classList.add("hidden");
+      document.getElementById("sc-setup-card").classList.remove("hidden");
+      document.getElementById("sc-results").classList.remove("hidden");
+      renderScResults(results);
+    });
+}
+
+function renderScResults(r) {
+  // Risk Score
+  const score = r.risk_score || 0;
+  document.getElementById("sc-risk-num").textContent = score;
+  document.getElementById("sc-risk-circle").className = "risk-score-circle " + getRiskClass(score);
+  document.getElementById("sc-risk-domain").textContent = r.domain || "";
+
+  // Dependency Graph
+  const deps = r.dependencies || [];
+  document.getElementById("dep-count").textContent = deps.length + " DEPENDENCIES";
+  const graph = document.getElementById("dep-graph");
+  if (deps.length === 0) {
+    graph.innerHTML = '<div class="empty-state">No AI dependencies detected.</div>';
+  } else {
+    graph.innerHTML = `
+      <div class="dep-center-node">
+        <div class="dep-node target">TARGET<br/><small>${r.domain||""}</small></div>
+      </div>
+      <div class="dep-nodes">
+        ${deps.map(dep => `
+          <div class="dep-node-wrap">
+            <div class="dep-connector"></div>
+            <div class="dep-node dep-risk-${(dep.risk||"").toLowerCase()}">
+              <div class="dep-node-name">${dep.dependency||""}</div>
+              <div class="dep-node-type">${dep.type||""}</div>
+              <div class="dep-node-risk">${dep.risk||""}</div>
+              <div class="dep-confidence">Confidence: ${Math.round((dep.confidence||0)*100)}%</div>
+            </div>
+          </div>`).join("")}
+      </div>
+      <div class="dep-list-detail">
+        ${deps.map(dep => `
+          <div class="finding-row finding-row--${(dep.risk||"").toLowerCase()}">
+            <div class="finding-badge ${(dep.risk||"").toLowerCase()}">${dep.risk||""}</div>
+            <div class="finding-content">
+              <div class="finding-url">${dep.dependency||""}</div>
+              <div class="finding-meta">${dep.type||""} &nbsp;·&nbsp; ${dep.description||""}</div>
+              ${(dep.findings||[]).map(f=>`<div class="finding-sub">● ${f}</div>`).join("")}
+            </div>
+          </div>`).join("")}
+      </div>`;
+  }
+
+  // Leakage Tests
+  const leakageTests = r.leakage_tests || [];
+  const leakageVulns = leakageTests.filter(l => l.vulnerable).length;
+  document.getElementById("leakage-count").textContent = leakageVulns + " VULNERABILITIES";
+  const leakageEl = document.getElementById("leakage-results");
+  if (leakageTests.length === 0) {
+    leakageEl.innerHTML = '<div class="empty-state">No AI endpoints accessible for testing.</div>';
+  } else {
+    leakageEl.innerHTML = leakageTests.map(t => `
+      <div class="finding-row finding-row--${t.vulnerable ? "critical" : "low"}">
+        <div class="finding-badge ${t.vulnerable ? "critical" : "low"}">${t.vulnerable ? "LEAKS" : "SAFE"}</div>
+        <div class="finding-content">
+          <div class="finding-url font-mono">${t.endpoint||""}</div>
+          ${t.leakage_details ? `<div class="finding-desc text-critical">${t.leakage_details}</div>` : ""}
+          <div class="finding-meta">Payloads tested: ${t.payloads_tested||0} &nbsp;·&nbsp; Risk: ${t.risk||""}</div>
+        </div>
+      </div>`).join("");
+  }
+
+  // Provenance
+  const provChecks = r.provenance_checks || [];
+  const provEl = document.getElementById("provenance-results");
+  if (provChecks.length === 0) {
+    provEl.innerHTML = '<div class="empty-state">No model provenance checks performed.</div>';
+  } else {
+    provEl.innerHTML = provChecks.map(p => `
+      <div class="finding-row finding-row--${(p.risk||"").toLowerCase()}">
+        <div class="finding-badge ${(p.risk||"").toLowerCase()}">${p.risk||""}</div>
+        <div class="finding-content">
+          <div class="finding-url">${p.model||""}</div>
+          <div class="finding-meta">Vendor: ${p.vendor||"Unknown"} &nbsp;·&nbsp; Trust: ${p.trust_level||""} &nbsp;·&nbsp; Verified: ${p.provenance_verified ? "✓ YES" : "✗ NO"}</div>
+          <div class="finding-desc">${p.notes||""}</div>
+        </div>
+      </div>`).join("");
+  }
+
+  // Poisoning
+  const poisonTests = r.poisoning_tests || [];
+  const suspiciousCount = poisonTests.reduce((sum, t) => sum + (t.suspicious_responses||[]).length, 0);
+  document.getElementById("poison-count").textContent = suspiciousCount + " SUSPICIOUS";
+  const poisonEl = document.getElementById("poison-results");
+  if (poisonTests.length === 0) {
+    poisonEl.innerHTML = '<div class="empty-state">No poisoning tests performed.</div>';
+  } else {
+    poisonEl.innerHTML = poisonTests.map(t => `
+      <div class="finding-row finding-row--${t.risk||"low"}">
+        <div class="finding-badge ${(t.risk||"low").toLowerCase()}">${(t.risk||"LOW")}</div>
+        <div class="finding-content">
+          <div class="finding-url font-mono">${t.endpoint||""}</div>
+          <div class="finding-meta">${t.assessment||""} &nbsp;·&nbsp; Triggers tested: ${t.triggers_tested||0}</div>
+          ${(t.suspicious_responses||[]).map(sr=>`<div class="finding-sub text-critical">Trigger: "${sr.trigger}" — ${sr.suspicion_reason}</div>`).join("")}
+        </div>
+      </div>`).join("");
+  }
+
+  // Findings
+  document.getElementById("sc-findings").innerHTML = markdownToHtml(r.findings || "No findings generated.");
+}
+
+function getRiskClass(score) {
+  if (score >= 75) return "critical";
+  if (score >= 50) return "high";
+  if (score >= 25) return "medium";
+  return "low";
+}
+
+function downloadScReport() {
+  if (scJobId) window.open("/api/report/" + scJobId, "_blank");
+}
+
+function markdownToHtml(text) {
+  return text
+    .replace(/^### (.+)$/gm,"<h4>$1</h4>")
+    .replace(/^## (.+)$/gm,"<h3>$1</h3>")
+    .replace(/^# (.+)$/gm,"<h2>$1</h2>")
+    .replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g,"<em>$1</em>")
+    .replace(/`(.+?)`/g,"<code>$1</code>")
+    .replace(/^- (.+)$/gm,"<li>$1</li>")
+    .replace(/\n\n/g,"<br/><br/>")
+    .replace(/\n/g,"<br/>");
+}
+
+function showAlert(msg, type) {
+  const div = document.createElement("div");
+  div.className = "flash flash-" + type;
+  div.textContent = msg;
+  document.querySelector(".main-content").prepend(div);
+  setTimeout(() => div.remove(), 5000);
+}
+</script>
+{% endblock %}

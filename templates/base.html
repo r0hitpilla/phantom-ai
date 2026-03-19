@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}PHANTOM AI{% endblock %} — Authorized Security Testing</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='phantom.css') }}" />
+</head>
+<body>
+
+<!-- Matrix Rain Canvas (subtle background) -->
+<canvas id="matrix-canvas"></canvas>
+
+<!-- Top Auth Banner -->
+<div class="auth-banner">
+  <span class="auth-banner-icon">⚠</span>
+  FOR AUTHORIZED SECURITY TESTING ONLY — ENSURE WRITTEN PERMISSION BEFORE SCANNING
+  <span class="auth-banner-icon">⚠</span>
+</div>
+
+<!-- App Shell -->
+<div class="app-shell">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <a href="/dashboard" class="logo-link">
+        <span class="logo-glitch" data-text="PHANTOM">PHANTOM</span>
+        <span class="logo-accent"> AI</span>
+      </a>
+      <div class="logo-sub">Red Team Platform</div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <a href="/dashboard" class="nav-item {% if request.endpoint == 'dashboard' %}active{% endif %}">
+        <span class="nav-icon">⬡</span>
+        <span class="nav-label">Dashboard</span>
+      </a>
+      <div class="nav-divider">MODULES</div>
+      <a href="/module/scanner" class="nav-item {% if request.endpoint == 'module_scanner' %}active{% endif %}">
+        <span class="nav-icon">◈</span>
+        <span class="nav-label">AI Scanner</span>
+        <span class="nav-badge critical">1</span>
+      </a>
+      <a href="/module/deepfake" class="nav-item {% if request.endpoint == 'module_deepfake' %}active{% endif %}">
+        <span class="nav-icon">◎</span>
+        <span class="nav-label">Deepfake Sim</span>
+        <span class="nav-badge high">2</span>
+      </a>
+      <a href="/module/redteam" class="nav-item {% if request.endpoint == 'module_redteam' %}active{% endif %}">
+        <span class="nav-icon">◉</span>
+        <span class="nav-label">Red Team</span>
+        <span class="nav-badge high">3</span>
+      </a>
+      <a href="/module/supplychain" class="nav-item {% if request.endpoint == 'module_supplychain' %}active{% endif %}">
+        <span class="nav-icon">⬡</span>
+        <span class="nav-label">Supply Chain</span>
+        <span class="nav-badge medium">4</span>
+      </a>
+      <a href="/module/cognitive" class="nav-item {% if request.endpoint == 'module_cognitive' %}active{% endif %}">
+        <span class="nav-icon">◈</span>
+        <span class="nav-label">Cognitive</span>
+        <span class="nav-badge medium">5</span>
+      </a>
+      <div class="nav-divider">SYSTEM</div>
+      <a href="/api/jobs" class="nav-item" target="_blank">
+        <span class="nav-icon">▷</span>
+        <span class="nav-label">Job Queue</span>
+      </a>
+      <a href="/logout" class="nav-item nav-logout">
+        <span class="nav-icon">⏻</span>
+        <span class="nav-label">Logout</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="sidebar-status">
+        <span class="status-dot online"></span>
+        <span class="status-text">System Online</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Content Area -->
+  <div class="main-wrapper">
+
+    <!-- Topbar -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="sidebar-toggle" onclick="toggleSidebar()" aria-label="Toggle sidebar">☰</button>
+        <div class="topbar-breadcrumb">
+          {% block breadcrumb %}<span>Dashboard</span>{% endblock %}
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="topbar-stat">
+          <span class="stat-label">Session</span>
+          <span class="stat-value" id="session-timer">--:--</span>
+        </div>
+        <div class="topbar-stat">
+          <span class="stat-label">User</span>
+          <span class="stat-value">{{ session.get('username', 'admin') }}</span>
+        </div>
+        <div class="threat-indicator">
+          <span class="threat-label">Threat Level</span>
+          <span class="threat-level high">HIGH</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Flash Messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="flash-container">
+          {% for category, message in messages %}
+            <div class="flash flash-{{ category }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <!-- Page Content -->
+    <main class="main-content">
+      {% block content %}{% endblock %}
+    </main>
+
+  </div><!-- /.main-wrapper -->
+</div><!-- /.app-shell -->
+
+<!-- Footer -->
+<footer class="app-footer">
+  PHANTOM AI &mdash; Authorized Security Testing Only &mdash;
+  <span class="footer-warning">Unauthorized use is illegal and unethical.</span>
+</footer>
+
+<script>
+// ─── Matrix Rain ──────────────────────────────────────────────────────────
+(function () {
+  const canvas = document.getElementById("matrix-canvas");
+  const ctx = canvas.getContext("2d");
+  let W, H, cols, drops;
+
+  const chars = "01アイウエオカキクケコサシスセソタチツテトABCDEF01010110";
+
+  function init() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+    const fontSize = 13;
+    cols = Math.floor(W / fontSize);
+    drops = Array(cols).fill(1);
+    ctx.font = fontSize + "px DM Mono, monospace";
+  }
+
+  function draw() {
+    ctx.fillStyle = "rgba(10, 14, 26, 0.05)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "rgba(0, 212, 255, 0.12)";
+    for (let i = 0; i < drops.length; i++) {
+      const ch = chars[Math.floor(Math.random() * chars.length)];
+      ctx.fillText(ch, i * 13, drops[i] * 13);
+      if (drops[i] * 13 > H && Math.random() > 0.975) drops[i] = 0;
+      drops[i]++;
+    }
+  }
+
+  init();
+  window.addEventListener("resize", init);
+  setInterval(draw, 60);
+})();
+
+// ─── Session Timer ───────────────────────────────────────────────────────
+(function () {
+  const start = Date.now();
+  const el = document.getElementById("session-timer");
+  if (!el) return;
+  setInterval(() => {
+    const s = Math.floor((Date.now() - start) / 1000);
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    el.textContent = String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0");
+  }, 1000);
+})();
+
+// ─── Sidebar Toggle ──────────────────────────────────────────────────────
+function toggleSidebar() {
+  document.querySelector(".sidebar").classList.toggle("collapsed");
+  document.querySelector(".main-wrapper").classList.toggle("sidebar-collapsed");
+}
+</script>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

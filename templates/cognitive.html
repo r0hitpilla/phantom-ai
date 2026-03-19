@@ -1,0 +1,386 @@
+{% extends "base.html" %}
+
+{% block title %}Cognitive Attack Profiling{% endblock %}
+{% block breadcrumb %}<span>Modules</span> <span class="bc-sep">›</span> <span class="bc-active">Cognitive Profiler</span>{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+  <div class="page-header-icon medium">◈</div>
+  <div class="page-header-text">
+    <h1 class="page-title">Cognitive Attack Profiling <span class="module-num-tag">MODULE 05</span></h1>
+    <p class="page-desc">Map psychological vulnerabilities across your organization. Identify who is most at risk and prioritize security awareness training where it matters most.</p>
+  </div>
+</div>
+
+<!-- Setup Card -->
+<div class="card" id="cog-setup-card">
+  <div class="card-header">
+    <h2 class="card-title">Employee Roster Setup</h2>
+    <span class="card-badge medium">PRIVACY-SENSITIVE</span>
+  </div>
+  <div class="card-body">
+
+    <div class="form-group">
+      <label class="form-label">Company Name</label>
+      <input type="text" id="cog-company" class="form-input" placeholder="Acme Corp" />
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Employee Roster (CSV format — one per line)</label>
+      <textarea
+        id="cog-employees"
+        class="form-input form-textarea font-mono"
+        rows="10"
+        placeholder="Name, Title, Department, Years at Company
+Jane Smith, VP Finance, Finance, 8
+Marcus Rivera, IT Administrator, IT, 4
+Priya Patel, Junior Developer, Engineering, 0.5
+James Thompson, CEO, Executive, 12
+Sarah Lee, HR Manager, HR, 6
+Tom Walsh, Sales Director, Sales, 3
+Alice Kim, Legal Counsel, Legal, 5
+Bob Chen, Accounts Payable Clerk, Finance, 2"
+      ></textarea>
+      <div class="form-hint">Format: Name, Title, Department, Years at Company. Leave employees blank to use demo data.</div>
+    </div>
+
+    <div class="auth-checkbox-wrap">
+      <label class="checkbox-label">
+        <input type="checkbox" id="cog-auth-confirm" class="checkbox-input" />
+        <span class="checkbox-custom"></span>
+        <span class="checkbox-text">
+          <strong>I confirm this profiling is authorized by the organization and all required privacy notices have been given.</strong>
+          Employee data will be used solely for security awareness improvement purposes.
+        </span>
+      </label>
+    </div>
+
+    <button class="btn btn-primary btn-scan" onclick="startProfiling()">
+      <span class="btn-scan-text">GENERATE COGNITIVE PROFILES</span>
+      <span class="btn-scan-line"></span>
+    </button>
+  </div>
+</div>
+
+<!-- Progress -->
+<div class="card hidden" id="cog-progress-card">
+  <div class="card-header">
+    <h2 class="card-title"><span class="spinner-small"></span> Cognitive Profiling In Progress</h2>
+    <span class="card-badge" id="cog-progress-pct">0%</span>
+  </div>
+  <div class="card-body">
+    <div class="progress-bar-wrap">
+      <div class="progress-bar scanning" id="cog-progress-bar" style="width:0%"></div>
+    </div>
+    <div class="progress-steps">
+      <div class="progress-step" id="cog-step-1">● Analyzing org structure...</div>
+      <div class="progress-step pending" id="cog-step-2">● Generating individual profiles...</div>
+      <div class="progress-step pending" id="cog-step-3">● Building vulnerability heatmap...</div>
+      <div class="progress-step pending" id="cog-step-4">● Identifying attack windows...</div>
+      <div class="progress-step pending" id="cog-step-5">● Generating profiling report...</div>
+    </div>
+  </div>
+</div>
+
+<!-- Results -->
+<div class="hidden" id="cog-results">
+
+  <!-- Overall Score -->
+  <div class="risk-hero-card">
+    <div class="risk-hero-left">
+      <div class="risk-score-circle" id="cog-risk-circle">
+        <div class="risk-score-num" id="cog-risk-num">—</div>
+        <div class="risk-score-label">/ 100</div>
+      </div>
+    </div>
+    <div class="risk-hero-right">
+      <h2 class="risk-hero-title">Organizational Vulnerability Score</h2>
+      <div class="risk-hero-domain" id="cog-company-name">—</div>
+      <p class="risk-hero-summary">Based on cognitive bias analysis across <span id="cog-emp-count">0</span> employees.</p>
+    </div>
+    <div class="risk-hero-actions">
+      <button class="btn btn-outline" onclick="downloadCogReport()">Download Report</button>
+    </div>
+  </div>
+
+  <!-- Org Heatmap -->
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">Department Vulnerability Heatmap</h2>
+      <span class="card-badge">RISK BY DEPARTMENT</span>
+    </div>
+    <div class="card-body">
+      <div class="heatmap-grid" id="heatmap-grid"></div>
+    </div>
+  </div>
+
+  <!-- Individual Profiles -->
+  <div class="section-header" style="margin-top: 2rem;">
+    <h2 class="section-title">Individual Risk Profiles</h2>
+    <div class="section-filters">
+      <button class="filter-btn active" onclick="filterProfiles('all', this)">All</button>
+      <button class="filter-btn" onclick="filterProfiles('CRITICAL', this)">Critical</button>
+      <button class="filter-btn" onclick="filterProfiles('HIGH', this)">High</button>
+      <button class="filter-btn" onclick="filterProfiles('MEDIUM', this)">Medium</button>
+    </div>
+  </div>
+  <div class="profiles-grid" id="profiles-grid"></div>
+
+  <!-- Attack Windows -->
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">Organizational Attack Windows</h2>
+      <span class="card-badge">TIMING INTELLIGENCE</span>
+    </div>
+    <div class="card-body">
+      <div class="attack-windows-list" id="attack-windows"></div>
+    </div>
+  </div>
+
+  <!-- Training Priority List -->
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">Training Priority List</h2>
+      <span class="card-badge success">REMEDIATION</span>
+    </div>
+    <div class="card-body" id="training-priority-list"></div>
+  </div>
+
+  <!-- Full Report -->
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">AI-Generated Cognitive Security Report</h2>
+      <span class="card-badge">CLAUDE ANALYSIS</span>
+    </div>
+    <div class="card-body">
+      <div class="findings-text" id="cog-report-text"></div>
+    </div>
+  </div>
+
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+let cogJobId = null;
+let cogPollInterval = null;
+let allProfiles = [];
+
+function startProfiling() {
+  const company = document.getElementById("cog-company").value.trim();
+  const authorized = document.getElementById("cog-auth-confirm").checked;
+  const employeesRaw = document.getElementById("cog-employees").value.trim();
+
+  if (!company) { showAlert("Company name is required.", "error"); return; }
+  if (!authorized) { showAlert("Authorization confirmation required.", "error"); return; }
+
+  // Parse employees CSV
+  const employees = [];
+  const lines = employeesRaw.split("\n").filter(l => l.trim() && !l.startsWith("Name,"));
+  lines.forEach(line => {
+    const parts = line.split(",").map(p => p.trim());
+    if (parts[0]) {
+      employees.push({
+        name: parts[0] || "",
+        title: parts[1] || "",
+        department: parts[2] || "",
+        years_at_company: parseFloat(parts[3]) || 1,
+      });
+    }
+  });
+
+  document.getElementById("cog-setup-card").classList.add("hidden");
+  document.getElementById("cog-progress-card").classList.remove("hidden");
+  document.getElementById("cog-results").classList.add("hidden");
+
+  fetch("/api/cognitive/profile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ company_name: company, employees: employees, authorized: true }),
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.error) { showAlert(data.error, "error"); return; }
+    cogJobId = data.job_id;
+    cogPollInterval = setInterval(pollCogStatus, 2500);
+  });
+}
+
+function pollCogStatus() {
+  if (!cogJobId) return;
+  fetch("/api/cognitive/status/" + cogJobId)
+    .then(r => r.json())
+    .then(data => {
+      const pct = data.progress || 0;
+      document.getElementById("cog-progress-bar").style.width = pct + "%";
+      document.getElementById("cog-progress-pct").textContent = pct + "%";
+
+      if (pct >= 20) document.getElementById("cog-step-1").className = "progress-step done";
+      if (pct >= 60) document.getElementById("cog-step-2").className = "progress-step done";
+      if (pct >= 70) document.getElementById("cog-step-3").className = "progress-step done";
+      if (pct >= 80) document.getElementById("cog-step-4").className = "progress-step done";
+      if (pct >= 95) document.getElementById("cog-step-5").className = "progress-step done";
+
+      if (data.status === "completed") {
+        clearInterval(cogPollInterval);
+        fetchCogResults();
+      } else if (data.status === "failed") {
+        clearInterval(cogPollInterval);
+        showAlert("Profiling failed: " + (data.error||""), "error");
+        document.getElementById("cog-setup-card").classList.remove("hidden");
+        document.getElementById("cog-progress-card").classList.add("hidden");
+      }
+    });
+}
+
+function fetchCogResults() {
+  fetch("/api/cognitive/results/" + cogJobId)
+    .then(r => r.json())
+    .then(results => {
+      document.getElementById("cog-progress-card").classList.add("hidden");
+      document.getElementById("cog-setup-card").classList.remove("hidden");
+      document.getElementById("cog-results").classList.remove("hidden");
+      renderCogResults(results);
+    });
+}
+
+function renderCogResults(r) {
+  // Overall Score
+  const score = r.overall_vulnerability_score || 0;
+  document.getElementById("cog-risk-num").textContent = score;
+  document.getElementById("cog-risk-circle").className = "risk-score-circle " + getRiskClass(score);
+  document.getElementById("cog-company-name").textContent = r.company || "";
+  document.getElementById("cog-emp-count").textContent = (r.profiles || []).length;
+
+  // Heatmap
+  const heatmap = r.org_heatmap || {};
+  const heatGrid = document.getElementById("heatmap-grid");
+  const sorted = Object.entries(heatmap).sort((a,b) => b[1]-a[1]);
+  heatGrid.innerHTML = sorted.map(([dept, score]) => `
+    <div class="heat-cell heat-cell--${getRiskClass(score)}">
+      <div class="heat-dept">${dept}</div>
+      <div class="heat-score">${score}</div>
+      <div class="heat-label">${getLabel(score)}</div>
+    </div>`).join("");
+
+  // Profiles
+  allProfiles = r.profiles || [];
+  renderProfiles(allProfiles);
+
+  // Attack Windows
+  const windows = r.attack_windows || [];
+  document.getElementById("attack-windows").innerHTML = windows.map(w => `
+    <div class="attack-window-card">
+      <div class="aw-header">
+        <div class="aw-event">${w.event||""}</div>
+        <span class="risk-badge high">${w.timing||""}</span>
+        <span class="aw-multiplier">×${w.risk_multiplier||1} Risk</span>
+      </div>
+      <div class="aw-reason">${w.reason||""}</div>
+      <div class="aw-meta">
+        <span>Departments: ${(w.vulnerable_depts||[]).join(", ")}</span>
+        <span>Attack type: ${w.attack_type||""}</span>
+      </div>
+    </div>`).join("");
+
+  // Training Priority
+  const critical = allProfiles.filter(p => p.training_priority === "CRITICAL").sort((a,b) => b.risk_score - a.risk_score);
+  const high = allProfiles.filter(p => p.training_priority === "HIGH").sort((a,b) => b.risk_score - a.risk_score);
+  const tpEl = document.getElementById("training-priority-list");
+  tpEl.innerHTML = `
+    ${critical.length ? `<div class="tp-group"><div class="tp-group-label critical">CRITICAL PRIORITY (${critical.length})</div>
+      ${critical.map(p => `<div class="tp-item"><span class="tp-name">${p.name}</span> <span class="tp-title">${p.title}</span> <span class="risk-score-pill critical">${p.risk_score}</span></div>`).join("")}</div>` : ""}
+    ${high.length ? `<div class="tp-group"><div class="tp-group-label high">HIGH PRIORITY (${high.length})</div>
+      ${high.map(p => `<div class="tp-item"><span class="tp-name">${p.name}</span> <span class="tp-title">${p.title}</span> <span class="risk-score-pill high">${p.risk_score}</span></div>`).join("")}</div>` : ""}`;
+
+  // Report
+  document.getElementById("cog-report-text").innerHTML = markdownToHtml(r.profiling_report || "No report generated.");
+}
+
+function renderProfiles(profiles) {
+  const grid = document.getElementById("profiles-grid");
+  grid.innerHTML = profiles.sort((a,b) => b.risk_score - a.risk_score).map(p => {
+    const biases = p.bias_scores || {};
+    const topBias = Object.entries(biases).sort((a,b) => b[1]-a[1]).slice(0,3);
+    return `
+    <div class="profile-card profile-card--${(p.training_priority||"").toLowerCase()}" data-priority="${p.training_priority}">
+      <div class="profile-header">
+        <div class="profile-avatar">${(p.name||"?")[0].toUpperCase()}</div>
+        <div class="profile-info">
+          <div class="profile-name">${p.name||""}</div>
+          <div class="profile-title">${p.title||""}</div>
+          <div class="profile-dept">${p.department||""}</div>
+        </div>
+        <div class="profile-score-wrap">
+          <div class="profile-score ${getRiskClass(p.risk_score)}">${p.risk_score||0}</div>
+          ${p.high_value_target ? '<div class="hvt-badge">HVT</div>' : ""}
+        </div>
+      </div>
+      <div class="profile-biases">
+        ${topBias.map(([bias, score]) => `
+          <div class="bias-bar-row">
+            <span class="bias-name">${bias.replace(/_/g," ")}</span>
+            <div class="bias-bar-wrap"><div class="bias-bar" style="width:${score*10}%"></div></div>
+            <span class="bias-score">${score}/10</span>
+          </div>`).join("")}
+      </div>
+      <div class="profile-attack">
+        <span class="attack-label">Attack Vector:</span>
+        <span class="attack-type">${p.recommended_attack_type||""}</span>
+      </div>
+      <div class="profile-footer">
+        <span class="training-priority-badge ${(p.training_priority||"").toLowerCase()}">${p.training_priority||""} PRIORITY</span>
+      </div>
+    </div>`}).join("");
+}
+
+function filterProfiles(priority, btn) {
+  document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  const filtered = priority === "all" ? allProfiles : allProfiles.filter(p => p.training_priority === priority);
+  renderProfiles(filtered);
+}
+
+function getRiskClass(score) {
+  if (score >= 75) return "critical";
+  if (score >= 50) return "high";
+  if (score >= 25) return "medium";
+  return "low";
+}
+
+function getLabel(score) {
+  if (score >= 75) return "CRITICAL";
+  if (score >= 50) return "HIGH";
+  if (score >= 25) return "MEDIUM";
+  return "LOW";
+}
+
+function downloadCogReport() {
+  if (cogJobId) window.open("/api/report/" + cogJobId, "_blank");
+}
+
+function markdownToHtml(text) {
+  return text
+    .replace(/^### (.+)$/gm,"<h4>$1</h4>")
+    .replace(/^## (.+)$/gm,"<h3>$1</h3>")
+    .replace(/^# (.+)$/gm,"<h2>$1</h2>")
+    .replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g,"<em>$1</em>")
+    .replace(/`(.+?)`/g,"<code>$1</code>")
+    .replace(/^- (.+)$/gm,"<li>$1</li>")
+    .replace(/^(\d+)\. (.+)$/gm,"<li>$2</li>")
+    .replace(/\n\n/g,"<br/><br/>")
+    .replace(/\n/g,"<br/>");
+}
+
+function showAlert(msg, type) {
+  const div = document.createElement("div");
+  div.className = "flash flash-" + type;
+  div.textContent = msg;
+  document.querySelector(".main-content").prepend(div);
+  setTimeout(() => div.remove(), 5000);
+}
+</script>
+{% endblock %}

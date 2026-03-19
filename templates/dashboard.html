@@ -1,0 +1,281 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block breadcrumb %}<span>Dashboard</span>{% endblock %}
+
+{% block content %}
+
+<!-- Hero Section -->
+<section class="hero-section">
+  <div class="hero-text">
+    <h1 class="hero-title">
+      <span class="text-accent">PHANTOM AI</span>
+    </h1>
+    <p class="hero-subtitle">Next-Generation AI-Powered Red Team Platform</p>
+    <p class="hero-desc">
+      Discover AI attack surfaces, simulate social engineering, run autonomous red team operations,
+      map supply chain risks, and profile cognitive vulnerabilities — all from a single platform.
+    </p>
+  </div>
+  <div class="hero-cta">
+    <a href="/module/scanner" class="btn btn-primary btn-scan">
+      <span class="btn-scan-text">START NEW ASSESSMENT</span>
+      <span class="btn-scan-line"></span>
+    </a>
+    <a href="/module/redteam" class="btn btn-outline">AUTONOMOUS RED TEAM</a>
+  </div>
+</section>
+
+<!-- Auth Warning -->
+<div class="warning-banner">
+  <span class="warning-icon">⚠</span>
+  <strong>Authorization Required:</strong> Only use PHANTOM AI on systems you own or have <u>written permission</u> to test.
+  Unauthorized use violates the Computer Fraud and Abuse Act (CFAA) and equivalent laws in your jurisdiction.
+</div>
+
+<!-- Stats Row -->
+<div class="stats-row">
+  <div class="stat-card">
+    <div class="stat-number">{{ stats.total_scans }}</div>
+    <div class="stat-label">Total Scans</div>
+    <div class="stat-icon">◈</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-number text-critical">{{ stats.critical_findings }}</div>
+    <div class="stat-label">Critical Findings</div>
+    <div class="stat-icon">⚠</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-number text-success">{{ stats.completed_scans }}</div>
+    <div class="stat-label">Completed Scans</div>
+    <div class="stat-icon">✓</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-number text-cyan">{{ stats.companies_protected }}</div>
+    <div class="stat-label">Targets Assessed</div>
+    <div class="stat-icon">◎</div>
+  </div>
+</div>
+
+<!-- Module Cards -->
+<div class="section-header">
+  <h2 class="section-title">Assessment Modules</h2>
+  <span class="section-badge">5 ACTIVE</span>
+</div>
+
+<div class="module-grid">
+
+  <a href="/module/scanner" class="module-card module-card--critical">
+    <div class="module-card-header">
+      <div class="module-icon">◈</div>
+      <div class="module-meta">
+        <span class="module-num">MODULE 01</span>
+        <span class="module-badge critical">CRITICAL RISK</span>
+      </div>
+    </div>
+    <h3 class="module-title">AI Attack Surface Scanner</h3>
+    <p class="module-desc">
+      Discover exposed AI endpoints, test for prompt injection vulnerabilities,
+      detect data exfiltration risks, and score your AI attack surface.
+    </p>
+    <div class="module-features">
+      <span class="feature-tag">Prompt Injection</span>
+      <span class="feature-tag">Endpoint Discovery</span>
+      <span class="feature-tag">Risk Scoring</span>
+    </div>
+    <div class="module-cta">Run Scanner →</div>
+  </a>
+
+  <a href="/module/deepfake" class="module-card module-card--high">
+    <div class="module-card-header">
+      <div class="module-icon">◎</div>
+      <div class="module-meta">
+        <span class="module-num">MODULE 02</span>
+        <span class="module-badge high">HIGH RISK</span>
+      </div>
+    </div>
+    <h3 class="module-title">Deepfake Social Engineering</h3>
+    <p class="module-desc">
+      Generate authorized deepfake simulation campaigns with AI-crafted call scripts,
+      spear-phishing emails, and employee vulnerability tracking.
+    </p>
+    <div class="module-features">
+      <span class="feature-tag">Voice Clone Scripts</span>
+      <span class="feature-tag">Spear Phishing</span>
+      <span class="feature-tag">Campaign Tracking</span>
+    </div>
+    <div class="module-cta">Run Simulation →</div>
+  </a>
+
+  <a href="/module/redteam" class="module-card module-card--high">
+    <div class="module-card-header">
+      <div class="module-icon">◉</div>
+      <div class="module-meta">
+        <span class="module-num">MODULE 03</span>
+        <span class="module-badge high">HIGH RISK</span>
+      </div>
+    </div>
+    <h3 class="module-title">Autonomous AI Red Team</h3>
+    <p class="module-desc">
+      AI-driven autonomous red team agent that gathers OSINT, generates multi-step attack chains,
+      and writes narrative reports showing exactly how an attacker would compromise you.
+    </p>
+    <div class="module-features">
+      <span class="feature-tag">OSINT Collection</span>
+      <span class="feature-tag">Attack Chains</span>
+      <span class="feature-tag">Narrative Report</span>
+    </div>
+    <div class="module-cta">Start Agent →</div>
+  </a>
+
+  <a href="/module/supplychain" class="module-card module-card--medium">
+    <div class="module-card-header">
+      <div class="module-icon">⬡</div>
+      <div class="module-meta">
+        <span class="module-num">MODULE 04</span>
+        <span class="module-badge medium">MEDIUM RISK</span>
+      </div>
+    </div>
+    <h3 class="module-title">AI Supply Chain Simulator</h3>
+    <p class="module-desc">
+      Detect third-party AI dependencies, test for prompt leakage and permission escalation,
+      verify model provenance, and simulate supply chain poisoning attacks.
+    </p>
+    <div class="module-features">
+      <span class="feature-tag">Dependency Detection</span>
+      <span class="feature-tag">Provenance Check</span>
+      <span class="feature-tag">Poison Simulation</span>
+    </div>
+    <div class="module-cta">Scan Dependencies →</div>
+  </a>
+
+  <a href="/module/cognitive" class="module-card module-card--medium">
+    <div class="module-card-header">
+      <div class="module-icon">◈</div>
+      <div class="module-meta">
+        <span class="module-num">MODULE 05</span>
+        <span class="module-badge medium">MEDIUM RISK</span>
+      </div>
+    </div>
+    <h3 class="module-title">Cognitive Attack Profiling</h3>
+    <p class="module-desc">
+      Map cognitive vulnerabilities across your organization. Identify high-value targets,
+      score biases, generate org heatmaps, and prioritize security awareness training.
+    </p>
+    <div class="module-features">
+      <span class="feature-tag">Bias Mapping</span>
+      <span class="feature-tag">Org Heatmap</span>
+      <span class="feature-tag">Training Priority</span>
+    </div>
+    <div class="module-cta">Profile Org →</div>
+  </a>
+
+</div>
+
+<!-- Recent Scans Table -->
+<div class="section-header" style="margin-top: 2.5rem;">
+  <h2 class="section-title">Recent Assessments</h2>
+  <a href="/api/jobs" class="section-link" target="_blank">View All →</a>
+</div>
+
+<div class="table-card">
+  {% if recent_jobs %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Job ID</th>
+        <th>Module</th>
+        <th>Target</th>
+        <th>Status</th>
+        <th>Progress</th>
+        <th>Risk Score</th>
+        <th>Started</th>
+        <th>Report</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for job in recent_jobs %}
+      <tr>
+        <td><code class="job-id">{{ job.job_id[:8] }}...</code></td>
+        <td><span class="module-tag">{{ job.module }}</span></td>
+        <td><span class="target-domain">{{ job.target }}</span></td>
+        <td>
+          <span class="status-badge status-{{ job.status }}">
+            {% if job.status == 'running' %}<span class="spinner-tiny"></span>{% endif %}
+            {{ job.status.upper() }}
+          </span>
+        </td>
+        <td>
+          <div class="mini-progress">
+            <div class="mini-progress-bar" style="width: {{ job.progress }}%"></div>
+          </div>
+          <span class="progress-text">{{ job.progress }}%</span>
+        </td>
+        <td>
+          {% if job.risk_score is not none %}
+            <span class="risk-score-pill {% if job.risk_score >= 75 %}critical{% elif job.risk_score >= 50 %}high{% elif job.risk_score >= 25 %}medium{% else %}low{% endif %}">
+              {{ job.risk_score }}/100
+            </span>
+          {% else %}
+            <span class="text-muted">—</span>
+          {% endif %}
+        </td>
+        <td><span class="timestamp">{{ job.created_at[:16].replace('T',' ') if job.created_at else '—' }}</span></td>
+        <td>
+          {% if job.status == 'completed' %}
+            <a href="/api/report/{{ job.job_id }}" class="btn-micro" target="_blank">PDF</a>
+          {% else %}
+            <span class="text-muted">—</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">◈</div>
+    <div class="empty-title">No assessments yet</div>
+    <div class="empty-desc">Start your first assessment using one of the modules above.</div>
+    <a href="/module/scanner" class="btn btn-primary" style="margin-top:1rem;">Run First Scan</a>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Global Threat Level -->
+<div class="threat-level-section">
+  <h2 class="section-title">Platform Threat Intelligence</h2>
+  <div class="threat-gauge-row">
+    <div class="threat-gauge-card">
+      <div class="gauge-label">AI Attack Surface</div>
+      <div class="gauge-bar-wrap">
+        <div class="gauge-bar" style="width:72%" data-level="critical"></div>
+      </div>
+      <div class="gauge-value critical">72/100 HIGH</div>
+    </div>
+    <div class="threat-gauge-card">
+      <div class="gauge-label">Social Engineering Risk</div>
+      <div class="gauge-bar-wrap">
+        <div class="gauge-bar" style="width:65%" data-level="high"></div>
+      </div>
+      <div class="gauge-value high">65/100 HIGH</div>
+    </div>
+    <div class="threat-gauge-card">
+      <div class="gauge-label">Supply Chain Exposure</div>
+      <div class="gauge-bar-wrap">
+        <div class="gauge-bar" style="width:58%" data-level="high"></div>
+      </div>
+      <div class="gauge-value high">58/100 HIGH</div>
+    </div>
+    <div class="threat-gauge-card">
+      <div class="gauge-label">Human Vulnerability</div>
+      <div class="gauge-bar-wrap">
+        <div class="gauge-bar" style="width:67%" data-level="high"></div>
+      </div>
+      <div class="gauge-value high">67/100 HIGH</div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

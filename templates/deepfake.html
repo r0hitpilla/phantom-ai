@@ -1,0 +1,353 @@
+{% extends "base.html" %}
+
+{% block title %}Deepfake Social Engineering Simulation{% endblock %}
+{% block breadcrumb %}<span>Modules</span> <span class="bc-sep">›</span> <span class="bc-active">Deepfake Sim</span>{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+  <div class="page-header-icon high">◎</div>
+  <div class="page-header-text">
+    <h1 class="page-title">Deepfake Social Engineering Simulation <span class="module-num-tag">MODULE 02</span></h1>
+    <p class="page-desc">Generate authorized voice-clone simulation scripts and spear-phishing campaigns. For security awareness training only.</p>
+  </div>
+</div>
+
+<!-- Setup Card -->
+<div class="card" id="setup-card">
+  <div class="card-header">
+    <h2 class="card-title">Simulation Setup</h2>
+    <span class="card-badge high">REQUIRES AUTHORIZATION</span>
+  </div>
+  <div class="card-body">
+
+    <div class="form-row">
+      <div class="form-group flex-1">
+        <label class="form-label">Company Name</label>
+        <input type="text" id="company-name" class="form-input" placeholder="Acme Corp" />
+      </div>
+      <div class="form-group" style="width:160px">
+        <label class="form-label">Scenario Type</label>
+        <select id="scenario-type" class="form-input form-select">
+          <option value="credential_reset">IT Credential Reset</option>
+          <option value="wire_transfer">Wire Transfer</option>
+          <option value="data_access">Emergency Data Access</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group flex-1">
+        <label class="form-label">Executive to Impersonate (Name)</label>
+        <input type="text" id="exec-name" class="form-input" placeholder="Michael Chen" />
+      </div>
+      <div class="form-group flex-1">
+        <label class="form-label">Executive Title</label>
+        <input type="text" id="exec-title" class="form-input" placeholder="Chief Information Security Officer" />
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Target Employees (one per line: Name, Title, Department)</label>
+      <textarea
+        id="employees-input"
+        class="form-input form-textarea font-mono"
+        rows="5"
+        placeholder="Jane Smith, VP Finance, Finance
+Marcus Rivera, IT Admin, IT
+Priya Patel, Junior Developer, Engineering"
+      ></textarea>
+      <div class="form-hint">Format: Name, Title, Department — one employee per line</div>
+    </div>
+
+    <div class="auth-checkbox-wrap">
+      <label class="checkbox-label">
+        <input type="checkbox" id="auth-confirm-df" class="checkbox-input" />
+        <span class="checkbox-custom"></span>
+        <span class="checkbox-text">
+          <strong>I confirm this simulation is authorized by the organization being tested.</strong>
+          All targets have been approved for inclusion in this security awareness exercise.
+        </span>
+      </label>
+    </div>
+
+    <button class="btn btn-primary btn-scan" id="generate-btn" onclick="generateSimulation()">
+      <span class="btn-scan-text">GENERATE SIMULATION</span>
+      <span class="btn-scan-line"></span>
+    </button>
+  </div>
+</div>
+
+<!-- Progress -->
+<div class="card hidden" id="df-progress-card">
+  <div class="card-header">
+    <h2 class="card-title"><span class="spinner-small"></span> Generating Simulation Content</h2>
+    <span class="card-badge" id="df-progress-pct">0%</span>
+  </div>
+  <div class="card-body">
+    <div class="progress-bar-wrap">
+      <div class="progress-bar scanning" id="df-progress-bar" style="width:0%"></div>
+    </div>
+    <div class="progress-steps">
+      <div class="progress-step" id="step-scenarios">● Generating scenarios...</div>
+      <div class="progress-step pending" id="step-script">● Generating call script...</div>
+      <div class="progress-step pending" id="step-email">● Generating email campaign...</div>
+      <div class="progress-step pending" id="step-training">● Generating training content...</div>
+    </div>
+  </div>
+</div>
+
+<!-- Results -->
+<div class="hidden" id="df-results">
+
+  <!-- Scenario Cards -->
+  <div class="section-header">
+    <h2 class="section-title">Generated Scenarios</h2>
+    <span class="section-badge" id="scenarios-count">0 SCENARIOS</span>
+  </div>
+  <div class="scenario-grid" id="scenarios-grid"></div>
+
+  <!-- Call Script -->
+  <div class="card" id="script-card">
+    <div class="card-header">
+      <h2 class="card-title">Deepfake Call Script</h2>
+      <div class="card-header-actions">
+        <button class="btn-micro" onclick="revealScript()">REVEAL FULL SCRIPT</button>
+        <button class="btn-micro" onclick="copyScript()">COPY</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="script-warning">
+        ⚠ For authorized security training use only. Script contains social engineering techniques.
+      </div>
+      <div class="script-display" id="script-display">
+        <div class="script-redacted-overlay" id="script-overlay">
+          <div class="redacted-icon">🔒</div>
+          <div class="redacted-text">Script generated. Click "REVEAL FULL SCRIPT" to view.</div>
+          <div class="redacted-sub">Only reveal in authorized training context.</div>
+        </div>
+        <div class="script-content font-mono" id="script-content" style="display:none"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Email Campaign -->
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">Spear-Phishing Email Template</h2>
+      <span class="card-badge high">EMAIL SIMULATION</span>
+    </div>
+    <div class="card-body">
+      <div class="email-preview" id="email-preview"></div>
+    </div>
+  </div>
+
+  <!-- Training Content -->
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">Employee Training Content</h2>
+      <span class="card-badge success">POST-SIMULATION TRAINING</span>
+    </div>
+    <div class="card-body">
+      <div class="training-content findings-text" id="training-content"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Campaign Management -->
+<div class="section-header" style="margin-top: 2.5rem;">
+  <h2 class="section-title">Active Campaigns</h2>
+  <button class="btn-micro" onclick="loadCampaigns()">REFRESH</button>
+</div>
+<div class="card">
+  <div class="card-body" id="campaigns-list">
+    <div class="empty-state">No campaigns created yet. Generate a simulation and create a campaign above.</div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentJobId = null;
+let pollInterval = null;
+let generatedResults = null;
+
+function generateSimulation() {
+  const companyName = document.getElementById("company-name").value.trim();
+  const execName = document.getElementById("exec-name").value.trim();
+  const execTitle = document.getElementById("exec-title").value.trim();
+  const scenarioType = document.getElementById("scenario-type").value;
+  const authorized = document.getElementById("auth-confirm-df").checked;
+  const employeesRaw = document.getElementById("employees-input").value.trim();
+
+  if (!companyName || !execName) {
+    showAlert("Company name and executive name are required.", "error"); return;
+  }
+  if (!authorized) {
+    showAlert("Authorization confirmation is required.", "error"); return;
+  }
+
+  const employees = employeesRaw.split("\n").filter(l => l.trim()).map(line => {
+    const parts = line.split(",").map(p => p.trim());
+    return { name: parts[0] || "", title: parts[1] || "", department: parts[2] || "" };
+  });
+
+  document.getElementById("setup-card").classList.add("hidden");
+  document.getElementById("df-progress-card").classList.remove("hidden");
+  document.getElementById("df-results").classList.add("hidden");
+
+  fetch("/api/deepfake/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      company_name: companyName,
+      exec_name: execName,
+      exec_title: execTitle,
+      scenario_type: scenarioType,
+      target_employees: employees,
+      authorized: true,
+    }),
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.error) { showAlert(data.error, "error"); return; }
+    currentJobId = data.job_id;
+    pollInterval = setInterval(pollDfStatus, 2500);
+  });
+}
+
+function pollDfStatus() {
+  if (!currentJobId) return;
+  fetch("/api/deepfake/status/" + currentJobId)
+    .then(r => r.json())
+    .then(data => {
+      const pct = data.progress || 0;
+      document.getElementById("df-progress-bar").style.width = pct + "%";
+      document.getElementById("df-progress-pct").textContent = pct + "%";
+      if (pct >= 20) document.getElementById("step-scenarios").className = "progress-step done";
+      if (pct >= 50) document.getElementById("step-script").className = "progress-step done";
+      if (pct >= 75) document.getElementById("step-email").className = "progress-step done";
+      if (pct >= 90) document.getElementById("step-training").className = "progress-step done";
+
+      if (data.status === "completed") {
+        clearInterval(pollInterval);
+        fetchDfResults();
+      } else if (data.status === "failed") {
+        clearInterval(pollInterval);
+        showAlert("Generation failed: " + (data.error || "Unknown error"), "error");
+        document.getElementById("setup-card").classList.remove("hidden");
+        document.getElementById("df-progress-card").classList.add("hidden");
+      }
+    });
+}
+
+function fetchDfResults() {
+  fetch("/api/deepfake/results/" + currentJobId)
+    .then(r => r.json())
+    .then(results => {
+      generatedResults = results;
+      document.getElementById("df-progress-card").classList.add("hidden");
+      document.getElementById("setup-card").classList.remove("hidden");
+      document.getElementById("df-results").classList.remove("hidden");
+      renderDfResults(results);
+    });
+}
+
+function renderDfResults(r) {
+  // Scenarios
+  const scenarios = r.scenarios || [];
+  document.getElementById("scenarios-count").textContent = scenarios.length + " SCENARIOS";
+  const grid = document.getElementById("scenarios-grid");
+  grid.innerHTML = scenarios.map(s => `
+    <div class="scenario-card scenario-card--${(s.risk_level || "MEDIUM").toLowerCase()}">
+      <div class="scenario-header">
+        <span class="scenario-badge ${(s.risk_level || "").toLowerCase()}">${s.risk_level || ""}</span>
+        <span class="scenario-type">${s.type || ""}</span>
+      </div>
+      <h3 class="scenario-title">${s.name || ""}</h3>
+      <p class="scenario-desc">${s.description || ""}</p>
+      <div class="scenario-meta">
+        <div class="scenario-dept">Target: ${s.target_department || ""}</div>
+        <div class="scenario-benchmark">Industry avg success: ${s.success_rate_benchmark || "—"}</div>
+      </div>
+      <div class="scenario-hooks">
+        ${(s.psychological_hooks || []).map(h => `<span class="hook-tag">${h}</span>`).join("")}
+      </div>
+    </div>`).join("");
+
+  // Script
+  const scriptContent = document.getElementById("script-content");
+  scriptContent.innerHTML = markdownToHtml(r.call_script || "No script generated.");
+
+  // Email
+  const emailPreview = document.getElementById("email-preview");
+  emailPreview.innerHTML = "<pre class='email-raw font-mono'>" + escapeHtml(r.email_campaign || "") + "</pre>";
+
+  // Training
+  document.getElementById("training-content").innerHTML = markdownToHtml(r.training_content || "");
+}
+
+function revealScript() {
+  document.getElementById("script-overlay").style.display = "none";
+  document.getElementById("script-content").style.display = "block";
+}
+
+function copyScript() {
+  const text = document.getElementById("script-content").textContent;
+  navigator.clipboard.writeText(text).then(() => showAlert("Script copied to clipboard.", "success"));
+}
+
+function loadCampaigns() {
+  fetch("/api/deepfake/campaigns")
+    .then(r => r.json())
+    .then(data => {
+      const container = document.getElementById("campaigns-list");
+      if (!data.length) {
+        container.innerHTML = '<div class="empty-state">No campaigns created yet.</div>';
+        return;
+      }
+      container.innerHTML = '<table class="data-table">' +
+        '<thead><tr><th>Campaign ID</th><th>Company</th><th>Scenario</th><th>Targets</th><th>Status</th><th>Created</th></tr></thead>' +
+        '<tbody>' + data.map(c => `
+          <tr>
+            <td><code class="job-id">${c.campaign_id.substring(0,8)}...</code></td>
+            <td>${c.company}</td>
+            <td>${c.scenario_type}</td>
+            <td>${c.targets ? c.targets.length : 0}</td>
+            <td><span class="status-badge status-${(c.status||"").toLowerCase()}">${c.status}</span></td>
+            <td><span class="timestamp">${(c.created_at||"").substring(0,16).replace("T"," ")}</span></td>
+          </tr>`).join("") +
+        '</tbody></table>';
+    });
+}
+
+function escapeHtml(text) {
+  return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function markdownToHtml(text) {
+  return text
+    .replace(/^### (.+)$/gm,"<h4>$1</h4>")
+    .replace(/^## (.+)$/gm,"<h3>$1</h3>")
+    .replace(/^# (.+)$/gm,"<h2>$1</h2>")
+    .replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g,"<em>$1</em>")
+    .replace(/`(.+?)`/g,"<code>$1</code>")
+    .replace(/^- (.+)$/gm,"<li>$1</li>")
+    .replace(/\n\n/g,"<br/><br/>")
+    .replace(/\n/g,"<br/>");
+}
+
+function showAlert(msg, type) {
+  const div = document.createElement("div");
+  div.className = "flash flash-" + type;
+  div.textContent = msg;
+  document.querySelector(".main-content").prepend(div);
+  setTimeout(() => div.remove(), 5000);
+}
+
+loadCampaigns();
+</script>
+{% endblock %}

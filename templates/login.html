@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PHANTOM AI — Login</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='phantom.css') }}" />
+</head>
+<body class="login-page">
+
+<canvas id="matrix-canvas"></canvas>
+
+<div class="login-container">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="logo-glitch-lg" data-text="PHANTOM AI">PHANTOM AI</div>
+      <div class="login-tagline">Next-Generation AI Red Team Platform</div>
+    </div>
+
+    <div class="login-auth-notice">
+      <span class="notice-icon">⚠</span>
+      Authorized security professionals only.<br/>
+      All sessions are logged and monitored.
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="flash flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <form method="POST" action="/login" class="login-form">
+      <div class="form-group">
+        <label class="form-label" for="username">Username</label>
+        <input
+          type="text"
+          id="username"
+          name="username"
+          class="form-input"
+          placeholder="Enter username"
+          value="admin"
+          required
+          autocomplete="username"
+        />
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="password">Password</label>
+        <input
+          type="password"
+          id="password"
+          name="password"
+          class="form-input"
+          placeholder="Enter password"
+          required
+          autocomplete="current-password"
+        />
+      </div>
+      <button type="submit" class="btn btn-primary btn-block btn-scan">
+        <span class="btn-scan-text">ACCESS PLATFORM</span>
+        <span class="btn-scan-line"></span>
+      </button>
+    </form>
+
+    <div class="login-footer">
+      <p>Default credentials: <code>admin</code> / <code>phantom2024</code></p>
+      <p>Set <code>PHANTOM_PASSWORD</code> env var to change password.</p>
+    </div>
+  </div>
+</div>
+
+<div class="login-bottom-banner">
+  PHANTOM AI — FOR AUTHORIZED SECURITY TESTING ONLY — UNAUTHORIZED USE IS ILLEGAL
+</div>
+
+<script>
+(function () {
+  const canvas = document.getElementById("matrix-canvas");
+  const ctx = canvas.getContext("2d");
+  let W, H, cols, drops;
+  const chars = "01アイウエオカキクケコ01010110PHANTOM";
+  function init() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+    cols = Math.floor(W / 14);
+    drops = Array(cols).fill(1);
+    ctx.font = "14px DM Mono, monospace";
+  }
+  function draw() {
+    ctx.fillStyle = "rgba(10, 14, 26, 0.06)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "rgba(255, 62, 62, 0.15)";
+    for (let i = 0; i < drops.length; i++) {
+      const ch = chars[Math.floor(Math.random() * chars.length)];
+      ctx.fillText(ch, i * 14, drops[i] * 14);
+      if (drops[i] * 14 > H && Math.random() > 0.975) drops[i] = 0;
+      drops[i]++;
+    }
+  }
+  init();
+  window.addEventListener("resize", init);
+  setInterval(draw, 55);
+})();
+</script>
+</body>
+</html>

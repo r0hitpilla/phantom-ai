@@ -1,0 +1,350 @@
+{% extends "base.html" %}
+
+{% block title %}Autonomous AI Red Team Agent{% endblock %}
+{% block breadcrumb %}<span>Modules</span> <span class="bc-sep">›</span> <span class="bc-active">Red Team Agent</span>{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+  <div class="page-header-icon high">◉</div>
+  <div class="page-header-text">
+    <h1 class="page-title">Autonomous AI Red Team Agent <span class="module-num-tag">MODULE 03</span></h1>
+    <p class="page-desc">AI-driven reconnaissance and attack chain generation. The agent thinks like an attacker and shows you exactly how your organization could be compromised.</p>
+  </div>
+</div>
+
+<!-- Setup Card -->
+<div class="card" id="rt-setup-card">
+  <div class="card-header">
+    <h2 class="card-title">Target Configuration</h2>
+    <span class="card-badge high">WRITTEN AUTHORIZATION REQUIRED</span>
+  </div>
+  <div class="card-body">
+    <div class="form-row">
+      <div class="form-group flex-2">
+        <label class="form-label">Target Domain</label>
+        <input type="text" id="rt-domain" class="form-input font-mono" placeholder="company.com" />
+      </div>
+      <div class="form-group flex-1">
+        <label class="form-label">Industry</label>
+        <select id="rt-industry" class="form-input form-select">
+          <option>Technology</option>
+          <option>Finance / Banking</option>
+          <option>Healthcare</option>
+          <option>Government</option>
+          <option>Retail / E-commerce</option>
+          <option>Energy / Utilities</option>
+          <option>Manufacturing</option>
+          <option>Legal / Professional Services</option>
+          <option>Education</option>
+          <option>Media / Entertainment</option>
+        </select>
+      </div>
+      <div class="form-group flex-1">
+        <label class="form-label">Employee Count</label>
+        <select id="rt-employees" class="form-input form-select">
+          <option>1-50</option>
+          <option>50-200</option>
+          <option>200-500</option>
+          <option selected>500-2000</option>
+          <option>2000-10000</option>
+          <option>10000+</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="auth-checkbox-wrap">
+      <label class="checkbox-label">
+        <input type="checkbox" id="rt-auth-confirm" class="checkbox-input" />
+        <span class="checkbox-custom"></span>
+        <span class="checkbox-text">
+          <strong>I confirm I have written authorization to conduct a red team assessment on this organization.</strong>
+          The scope of this assessment has been agreed upon in writing with the target organization's security leadership.
+        </span>
+      </label>
+    </div>
+
+    <button class="btn btn-primary btn-scan" onclick="startRedTeam()">
+      <span class="btn-scan-text">DEPLOY RED TEAM AGENT</span>
+      <span class="btn-scan-line"></span>
+    </button>
+  </div>
+</div>
+
+<!-- Agent Thinking Display -->
+<div class="card hidden" id="rt-thinking-card">
+  <div class="card-header">
+    <h2 class="card-title">
+      <span class="ai-thinking-icon">◉</span>
+      <span class="ai-thinking-text">Red Team Agent Reasoning</span>
+    </h2>
+    <span class="card-badge" id="rt-progress-pct">0%</span>
+  </div>
+  <div class="card-body">
+    <div class="progress-bar-wrap">
+      <div class="progress-bar scanning" id="rt-progress-bar" style="width:0%"></div>
+    </div>
+    <div class="agent-thinking-box" id="rt-thinking-output">
+      <div class="thinking-line">
+        <span class="thinking-icon">→</span>
+        <span>Agent initialized. Beginning intelligence gathering...</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Results -->
+<div class="hidden" id="rt-results">
+
+  <!-- OSINT Panel -->
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">OSINT Intelligence Report</h2>
+      <span class="card-badge">PHASE 1: RECON</span>
+    </div>
+    <div class="card-body">
+      <div class="osint-grid" id="osint-grid"></div>
+    </div>
+  </div>
+
+  <!-- Attack Surface Scores -->
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">Attack Vector Scores</h2>
+      <span class="card-badge">SCORED 1-10</span>
+    </div>
+    <div class="card-body">
+      <div id="attack-surface-bars"></div>
+    </div>
+  </div>
+
+  <!-- Attack Chains -->
+  <div class="section-header" style="margin-top: 2rem;">
+    <h2 class="section-title">Generated Attack Chains</h2>
+    <span class="section-badge" id="chains-count">0 CHAINS</span>
+  </div>
+  <div id="attack-chains-container"></div>
+
+  <!-- Narrative Report -->
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">Narrative Executive Report</h2>
+      <div class="card-header-actions">
+        <span class="card-badge">CLAUDE ANALYSIS</span>
+        <button class="btn-micro" onclick="downloadRtReport()">PDF REPORT</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="findings-text" id="rt-narrative"></div>
+    </div>
+  </div>
+
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+let rtJobId = null;
+let rtPollInterval = null;
+const seenLogMsgs = new Set();
+
+function startRedTeam() {
+  const domain = document.getElementById("rt-domain").value.trim();
+  const industry = document.getElementById("rt-industry").value;
+  const employeeCount = document.getElementById("rt-employees").value;
+  const authorized = document.getElementById("rt-auth-confirm").checked;
+
+  if (!domain) { showAlert("Target domain is required.", "error"); return; }
+  if (!authorized) { showAlert("Authorization confirmation is required.", "error"); return; }
+
+  document.getElementById("rt-setup-card").classList.add("hidden");
+  document.getElementById("rt-thinking-card").classList.remove("hidden");
+  document.getElementById("rt-results").classList.add("hidden");
+
+  fetch("/api/redteam/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ domain, industry, employee_count: employeeCount, authorized: true }),
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.error) { showAlert(data.error, "error"); return; }
+    rtJobId = data.job_id;
+    rtPollInterval = setInterval(pollRtStatus, 2500);
+  });
+}
+
+function pollRtStatus() {
+  if (!rtJobId) return;
+  fetch("/api/redteam/status/" + rtJobId)
+    .then(r => r.json())
+    .then(data => {
+      const pct = data.progress || 0;
+      document.getElementById("rt-progress-bar").style.width = pct + "%";
+      document.getElementById("rt-progress-pct").textContent = pct + "%";
+
+      const logs = data.progress_log || [];
+      logs.forEach(entry => {
+        const key = entry.timestamp + entry.message;
+        if (!seenLogMsgs.has(key)) {
+          seenLogMsgs.add(key);
+          addThinkingLine(entry.message, entry.level);
+        }
+      });
+
+      if (data.status === "completed") {
+        clearInterval(rtPollInterval);
+        fetchRtResults();
+      } else if (data.status === "failed") {
+        clearInterval(rtPollInterval);
+        showAlert("Red team scan failed: " + (data.error || ""), "error");
+        document.getElementById("rt-setup-card").classList.remove("hidden");
+        document.getElementById("rt-thinking-card").classList.add("hidden");
+      }
+    });
+}
+
+function fetchRtResults() {
+  fetch("/api/redteam/results/" + rtJobId)
+    .then(r => r.json())
+    .then(results => {
+      document.getElementById("rt-thinking-card").classList.add("hidden");
+      document.getElementById("rt-setup-card").classList.remove("hidden");
+      document.getElementById("rt-results").classList.remove("hidden");
+      renderRtResults(results);
+    });
+}
+
+function addThinkingLine(msg, level) {
+  const box = document.getElementById("rt-thinking-output");
+  const div = document.createElement("div");
+  div.className = "thinking-line thinking-line--" + (level || "INFO").toLowerCase();
+  div.innerHTML = `<span class="thinking-icon">${level === "SUCCESS" ? "✓" : level === "ERROR" ? "✗" : "→"}</span> <span>${msg}</span>`;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+function renderRtResults(r) {
+  // OSINT
+  const osint = r.osint || {};
+  const profile = r.company_profile || {};
+  const osintGrid = document.getElementById("osint-grid");
+  const subs = osint.subdomains || [];
+  const tech = (profile.technologies || []).concat(profile.ai_tools || []);
+
+  osintGrid.innerHTML = `
+    <div class="osint-block">
+      <div class="osint-block-title">Subdomains Found</div>
+      <div class="osint-block-count">${subs.length}</div>
+      <div class="osint-sub-list">${subs.slice(0,10).map(s=>`<div class="subdomain-tag font-mono">${s}</div>`).join("")}${subs.length>10?`<div class="text-muted">+${subs.length-10} more</div>`:""}</div>
+    </div>
+    <div class="osint-block">
+      <div class="osint-block-title">Technologies Detected</div>
+      <div class="osint-block-count">${tech.length}</div>
+      <div class="tech-tags">${tech.map(t=>`<span class="tech-tag">${t}</span>`).join("")}</div>
+    </div>
+    <div class="osint-block">
+      <div class="osint-block-title">WHOIS Info</div>
+      <div class="osint-whois">
+        <div><span class="osint-key">Org:</span> ${(osint.whois || {}).org || "—"}</div>
+        <div><span class="osint-key">Registrar:</span> ${(osint.whois || {}).registrar || "—"}</div>
+        <div><span class="osint-key">Created:</span> ${(osint.whois || {}).creation_date || "—"}</div>
+        <div><span class="osint-key">Country:</span> ${(osint.whois || {}).country || "—"}</div>
+      </div>
+    </div>
+    <div class="osint-block">
+      <div class="osint-block-title">Email Patterns</div>
+      <div class="email-patterns">${(profile.email_patterns || []).map(p=>`<div class="font-mono email-pattern">${p}</div>`).join("").substring(0,500)}</div>
+    </div>`;
+
+  // Attack Surface Bars
+  const scores = r.attack_surface_scores || {};
+  const barsContainer = document.getElementById("attack-surface-bars");
+  barsContainer.innerHTML = Object.entries(scores)
+    .sort((a,b) => b[1]-a[1])
+    .map(([vector, score]) => {
+      const pct = (score / 10) * 100;
+      const cls = score >= 8 ? "critical" : score >= 6 ? "high" : score >= 4 ? "medium" : "low";
+      return `
+      <div class="vector-bar-row">
+        <div class="vector-label">${vector}</div>
+        <div class="vector-bar-wrap">
+          <div class="vector-bar ${cls}" style="width:${pct}%"></div>
+        </div>
+        <div class="vector-score ${cls}">${score}/10</div>
+      </div>`;
+    }).join("");
+
+  // Attack Chains
+  const chains = r.attack_chains || [];
+  document.getElementById("chains-count").textContent = chains.length + " CHAINS";
+  const chainsContainer = document.getElementById("attack-chains-container");
+  chainsContainer.innerHTML = chains.map((chain, idx) => {
+    const steps = chain.steps || [];
+    const stepsHtml = steps.map(step => `
+      <div class="chain-step chain-step--${(step.risk||"").toLowerCase()}">
+        <div class="step-phase">${step.phase}</div>
+        <div class="step-content">
+          <div class="step-desc">${step.description || ""}</div>
+          ${step.ai_tactic ? `<div class="step-ai-tactic">AI Tactic: ${step.ai_tactic}</div>` : ""}
+          ${step.techniques && step.techniques.length ? `<div class="step-techniques">${step.techniques.map(t=>`<span class="tech-tag">${t}</span>`).join("")}</div>` : ""}
+          ${step.mitigations && step.mitigations.length ? `<div class="step-mitigations">Mitigate: ${step.mitigations[0]}</div>` : ""}
+        </div>
+        <div class="step-risk ${(step.risk||"").toLowerCase()}">${step.risk||""}</div>
+      </div>`).join("<div class='chain-arrow'>↓</div>");
+
+    return `
+    <div class="chain-card chain-card--${(chain.overall_risk||"").toLowerCase()}">
+      <div class="chain-header">
+        <div>
+          <div class="chain-num">CHAIN ${idx+1}</div>
+          <div class="chain-name">${chain.name || ""}</div>
+          <div class="chain-objective">${chain.objective || ""}</div>
+        </div>
+        <div class="chain-meta">
+          <div class="chain-actor">${chain.threat_actor || ""}</div>
+          <div class="chain-dwell">Dwell: ${chain.estimated_dwell_time || "—"}</div>
+          <span class="risk-badge ${(chain.overall_risk||"").toLowerCase()}">${chain.overall_risk||""}</span>
+        </div>
+      </div>
+      <div class="chain-steps">${stepsHtml}</div>
+      ${chain.iocs && chain.iocs.length ? `
+      <div class="chain-iocs">
+        <div class="iocs-label">Indicators of Compromise:</div>
+        ${chain.iocs.map(ioc=>`<div class="ioc-item">● ${ioc}</div>`).join("")}
+      </div>` : ""}
+    </div>`;
+  }).join("");
+
+  // Narrative
+  document.getElementById("rt-narrative").innerHTML = markdownToHtml(r.narrative_report || "No narrative generated.");
+}
+
+function downloadRtReport() {
+  if (rtJobId) window.open("/api/report/" + rtJobId, "_blank");
+}
+
+function markdownToHtml(text) {
+  return text
+    .replace(/^### (.+)$/gm,"<h4>$1</h4>")
+    .replace(/^## (.+)$/gm,"<h3>$1</h3>")
+    .replace(/^# (.+)$/gm,"<h2>$1</h2>")
+    .replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g,"<em>$1</em>")
+    .replace(/`(.+?)`/g,"<code>$1</code>")
+    .replace(/^- (.+)$/gm,"<li>$1</li>")
+    .replace(/^(\d+)\. (.+)$/gm,"<li>$2</li>")
+    .replace(/\n\n/g,"<br/><br/>")
+    .replace(/\n/g,"<br/>");
+}
+
+function showAlert(msg, type) {
+  const div = document.createElement("div");
+  div.className = "flash flash-" + type;
+  div.textContent = msg;
+  document.querySelector(".main-content").prepend(div);
+  setTimeout(() => div.remove(), 5000);
+}
+</script>
+{% endblock %}
