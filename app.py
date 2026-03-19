@@ -109,14 +109,9 @@ def apply_security_headers(response):
     return add_security_headers(response)
 
 
-PUBLIC_PATHS = {"/login", "/logout", "/", "/auth/google", "/auth/google/callback"}
-
 @app.before_request
 def enforce_session_timeout():
-    """Expire sessions that have been idle longer than the configured lifetime."""
-    # Never redirect on public routes — prevents login redirect loops
-    if request.path in PUBLIC_PATHS or request.path.startswith("/static"):
-        return
+    """Expire sessions idle longer than 15 minutes. Never redirects — login_required handles that."""
     if not session.get("logged_in"):
         return
     try:
@@ -128,11 +123,10 @@ def enforce_session_timeout():
         if datetime.utcnow() - last_active > timedelta(minutes=15):
             session.clear()
             flash("Your session has expired. Please log in again.", "info")
-            return redirect(url_for("login"))
-        session["last_active"] = datetime.utcnow().isoformat()
+        else:
+            session["last_active"] = datetime.utcnow().isoformat()
     except (ValueError, TypeError):
         session.clear()
-        return redirect(url_for("login"))
 
 
 @app.before_request
