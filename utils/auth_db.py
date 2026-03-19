@@ -12,13 +12,15 @@ import hashlib
 import os
 import secrets
 import sqlite3
+import sys
 from datetime import datetime, timedelta
 
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from utils.security import decrypt_field, encrypt_field, hash_for_lookup
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "phantom_users.db")
+_default_db = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "phantom_users.db")
+DB_PATH = os.environ.get("DB_PATH", _default_db)
 
 # Account lockout config (OWASP A07)
 LOCKOUT_THRESHOLD = 5          # failed attempts before lockout
@@ -266,15 +268,42 @@ def get_by_id(user_id: str) -> dict | None:
 
 
 def get_by_email(email: str) -> dict | None:
-    h = hash_for_lookup(email.lower().strip())
+    target = email.lower().strip()
+    h = hash_for_lookup(target)
+
     with _conn() as db:
+        # 1. Fast path: HMAC hash index
         row = _row(db, "SELECT * FROM users WHERE email_hash = ?", h)
-        # Fallback: legacy rows still have plain email column
-        if not row:
-            cols = _existing_columns(db, "users")
-            if "email" in cols:
-                row = _row(db, "SELECT * FROM users WHERE LOWER(email) = ?", email.lower().strip())
-    return _decrypt_user(row)
+        if row:
+            return _decrypt_user(row)
+
+        # 2. Legacy plain-text email column (old schema still present)
+        cols = _existing_columns(db, "users")
+        if "email" in cols:
+            row = _row(db, "SELECT * FROM users WHERE LOWER(email) = ?", target)
+            if row:
+                return _decrypt_user(row)
+
+        # 3. Full-scan fallback: decrypt email_enc and compare
+        #    Handles empty/wrong email_hash (migration issues, SECRET_KEY change)
+        rows = db.execute("SELECT * FROM users").fetchall()
+        for r in rows:
+            try:
+                stored = decrypt_field(dict(r).get("email_enc", "")).lower().strip()
+                if stored == target:
+                    found = dict(r)
+                    # Heal the hash so future lookups are fast
+                    if not found.get("email_hash"):
+                        db.execute(
+                            "UPDATE users SET email_hash=? WHERE id=?",
+                            (h, found["id"]),
+                        )
+                        db.commit()
+                    return _decrypt_user(found)
+            except Exception:
+                pass
+
+    return None
 
 
 def get_by_google_sub(sub: str) -> dict | None:
@@ -339,17 +368,25 @@ def login_email_user(email: str, password: str, ip: str | None = None) -> dict |
     user = get_by_email(email)
 
     with _conn() as db:
-        if not user or user.get("provider") != "email":
-            # Record failed attempt to non-existent account (prevents enumeration timing)
+        if not user:
+            print(f"[auth] login fail: user not found for email hash {email_hash[:8]}", file=sys.stderr)
+            _record_attempt(db, email_hash, ip, success=False)
+            db.commit()
+            return None
+
+        if user.get("provider") != "email":
+            print(f"[auth] login fail: provider={user.get('provider')} not email", file=sys.stderr)
             _record_attempt(db, email_hash, ip, success=False)
             db.commit()
             return None
 
         if not user.get("is_active", 1):
+            print(f"[auth] login fail: account inactive uid={user['id']}", file=sys.stderr)
             audit("login_blocked_inactive", user_id=user["id"], ip=ip)
             return None
 
         if _is_locked(user):
+            print(f"[auth] login fail: account locked uid={user['id']}", file=sys.stderr)
             audit("login_blocked_locked", user_id=user["id"], ip=ip)
             _record_attempt(db, email_hash, ip, success=False)
             db.commit()
@@ -373,6 +410,7 @@ def login_email_user(email: str, password: str, ip: str | None = None) -> dict |
                     )
 
         if not password_ok:
+            print(f"[auth] login fail: wrong password uid={user['id']}", file=sys.stderr)
             _record_attempt(db, email_hash, ip, success=False)
             _apply_lockout_if_needed(db, user["id"], email_hash)
             db.commit()
