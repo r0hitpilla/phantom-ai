@@ -181,46 +181,20 @@ function toggleSidebar() {
 
 <script>
 // ─── Non-admin guard ─────────────────────────────────────────────────────────
-// Intercept any fetch/XHR that gets a 403 "Admin access required" and show
-// a clean flash banner instead of letting the progress UI stay visible.
-(function () {
-  if (window.PHANTOM_IS_ADMIN) return; // admins skip all of this
-
-  const _fetch = window.fetch;
-  window.fetch = async function (...args) {
-    const res = await _fetch(...args);
-    if (res.status === 403) {
-      // Clone so the original caller can still read the body
-      const clone = res.clone();
-      clone.json().then(function (data) {
-        const msg = (data && (data.message || data.error)) || "Admin access required to run scans.";
-        // Hide any in-progress UI the page might have shown
-        document.querySelectorAll(
-          ".scan-progress, .terminal-body, #scan-progress, #progress-section, .progress-section"
-        ).forEach(function (el) { el.style.display = "none"; });
-        // Show a prominent error banner
-        let banner = document.getElementById("_phantom_admin_banner");
-        if (!banner) {
-          banner = document.createElement("div");
-          banner.id = "_phantom_admin_banner";
-          banner.style.cssText = [
-            "position:fixed", "top:60px", "left:50%", "transform:translateX(-50%)",
-            "background:#1a0000", "border:1px solid #FF3E3E", "color:#FF3E3E",
-            "padding:0.9rem 1.6rem", "border-radius:8px", "font-size:0.9rem",
-            "font-family:'DM Mono',monospace", "z-index:9999",
-            "box-shadow:0 4px 24px rgba(255,62,62,0.25)",
-            "max-width:480px", "text-align:center", "line-height:1.5"
-          ].join(";");
-          document.body.appendChild(banner);
-        }
-        banner.innerHTML = "<strong>⛔ Access Denied</strong><br>" + msg;
-        banner.style.display = "block";
-        setTimeout(function () { banner.style.display = "none"; }, 6000);
-      }).catch(function () {});
-    }
-    return res;
-  };
-})();
+if (!window.PHANTOM_IS_ADMIN) {
+  document.addEventListener("DOMContentLoaded", function () {
+    const scanFns = ["startScan","startAppSec","startRedTeam","startScScan","startProfiling","generateSimulation"];
+    document.querySelectorAll("button[onclick]").forEach(function (btn) {
+      const fn = (btn.getAttribute("onclick") || "").split("(")[0].trim();
+      if (scanFns.indexOf(fn) !== -1) {
+        btn.disabled = true;
+        btn.title = "Admin access required to run scans";
+        btn.style.opacity = "0.4";
+        btn.style.cursor = "not-allowed";
+      }
+    });
+  });
+}
 </script>
 </body>
 </html>
