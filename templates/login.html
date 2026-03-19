@@ -27,8 +27,6 @@
 </head>
 <body class="login-page">
 
-<canvas id="matrix-canvas"></canvas>
-
 <div class="login-container">
   <div class="login-card">
     <div class="login-logo">
@@ -91,34 +89,5 @@
   PHANTOM AI — FOR AUTHORIZED SECURITY TESTING ONLY — UNAUTHORIZED USE IS ILLEGAL
 </div>
 
-<script>
-(function () {
-  const canvas = document.getElementById("matrix-canvas");
-  const ctx = canvas.getContext("2d");
-  let W, H, cols, drops;
-  const chars = "01アイウエオカキクケコ01010110PHANTOM";
-  function init() {
-    W = canvas.width = window.innerWidth;
-    H = canvas.height = window.innerHeight;
-    cols = Math.floor(W / 14);
-    drops = Array(cols).fill(1);
-    ctx.font = "14px DM Mono, monospace";
-  }
-  function draw() {
-    ctx.fillStyle = "rgba(10, 14, 26, 0.06)";
-    ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = "rgba(255, 62, 62, 0.15)";
-    for (let i = 0; i < drops.length; i++) {
-      const ch = chars[Math.floor(Math.random() * chars.length)];
-      ctx.fillText(ch, i * 14, drops[i] * 14);
-      if (drops[i] * 14 > H && Math.random() > 0.975) drops[i] = 0;
-      drops[i]++;
-    }
-  }
-  init();
-  window.addEventListener("resize", init);
-  setInterval(draw, 55);
-})();
-</script>
 </body>
 </html>

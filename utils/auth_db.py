@@ -8,6 +8,7 @@ Roles:
   user  — read-only, can view dashboard and reports, cannot run scans
 """
 
+import hashlib
 import os
 import secrets
 import sqlite3
@@ -76,16 +77,34 @@ def init_db():
         if "users" in tables and _needs_recreation(db):
             print("[auth_db] Migrating users table to new encrypted schema…")
             db.execute(_NEW_SCHEMA)
-            # Copy whatever columns exist from the old table
-            old_cols = _existing_columns(db, "users")
-            shared = {"id", "provider", "password_hash", "google_sub", "role", "created_at"}
-            shared_cols = shared & old_cols
-            col_list = ", ".join(shared_cols)
-            db.execute(f"INSERT INTO users_new ({col_list}) SELECT {col_list} FROM users")
+            # Fetch every old row (includes plain-text email / name columns)
+            old_rows = db.execute(
+                "SELECT id, email, name, provider, password_hash, google_sub, role, created_at FROM users"
+            ).fetchall()
+            for row in old_rows:
+                plain_email = (row["email"] or "").strip().lower()
+                plain_name = (row["name"] or "").strip()
+                db.execute(
+                    """INSERT INTO users_new
+                       (id, email_enc, email_hash, name_enc, provider, password_hash,
+                        google_sub, role, created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (
+                        row["id"],
+                        encrypt_field(plain_email),
+                        hash_for_lookup(plain_email) if plain_email else "",
+                        encrypt_field(plain_name),
+                        row["provider"],
+                        row["password_hash"],
+                        row["google_sub"],
+                        row["role"],
+                        row["created_at"],
+                    ),
+                )
             db.execute("DROP TABLE users")
             db.execute("ALTER TABLE users_new RENAME TO users")
             db.commit()
-            print("[auth_db] Table recreated. Running data migration…")
+            print(f"[auth_db] Migrated {len(old_rows)} users. Table recreated.")
 
         # ── Create fresh if not present ──────────────────────────────────────
         if "users" not in tables:
@@ -149,6 +168,15 @@ def init_db():
 
 def _make_id() -> str:
     return secrets.token_hex(16)
+
+
+def _check_legacy_password(password: str, stored_hash: str) -> bool:
+    """Backward compat for SHA256+salt hashes created before the OWASP upgrade."""
+    try:
+        salt, h = stored_hash.split(":", 1)
+        return hashlib.sha256((password + salt).encode()).hexdigest() == h
+    except Exception:
+        return False
 
 
 def _is_admin_email(email: str) -> bool:
@@ -328,7 +356,23 @@ def login_email_user(email: str, password: str, ip: str | None = None) -> dict |
             return None
 
         pw_hash = user.get("password_hash", "")
-        if not pw_hash or not check_password_hash(pw_hash, password):
+        # Try werkzeug PBKDF2 first; fall back to legacy SHA256+salt for migrated accounts
+        password_ok = False
+        if pw_hash:
+            try:
+                password_ok = check_password_hash(pw_hash, password)
+            except Exception:
+                password_ok = False
+            if not password_ok:
+                password_ok = _check_legacy_password(password, pw_hash)
+                if password_ok:
+                    # Upgrade legacy hash to werkzeug on successful login
+                    db.execute(
+                        "UPDATE users SET password_hash=? WHERE id=?",
+                        (generate_password_hash(password), user["id"]),
+                    )
+
+        if not password_ok:
             _record_attempt(db, email_hash, ip, success=False)
             _apply_lockout_if_needed(db, user["id"], email_hash)
             db.commit()

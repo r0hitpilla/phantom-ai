@@ -11,9 +11,6 @@
 </head>
 <body>
 
-<!-- Matrix Rain Canvas (subtle background) -->
-<canvas id="matrix-canvas"></canvas>
-
 <!-- Top Auth Banner -->
 <div class="auth-banner">
   <span class="auth-banner-icon">⚠</span>
@@ -158,39 +155,7 @@
 </footer>
 
 <script>
-// ─── Matrix Rain ──────────────────────────────────────────────────────────
-(function () {
-  const canvas = document.getElementById("matrix-canvas");
-  const ctx = canvas.getContext("2d");
-  let W, H, cols, drops;
-
-  const chars = "01アイウエオカキクケコサシスセソタチツテトABCDEF01010110";
-
-  function init() {
-    W = canvas.width = window.innerWidth;
-    H = canvas.height = window.innerHeight;
-    const fontSize = 13;
-    cols = Math.floor(W / fontSize);
-    drops = Array(cols).fill(1);
-    ctx.font = fontSize + "px DM Mono, monospace";
-  }
-
-  function draw() {
-    ctx.fillStyle = "rgba(10, 14, 26, 0.05)";
-    ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = "rgba(0, 212, 255, 0.12)";
-    for (let i = 0; i < drops.length; i++) {
-      const ch = chars[Math.floor(Math.random() * chars.length)];
-      ctx.fillText(ch, i * 13, drops[i] * 13);
-      if (drops[i] * 13 > H && Math.random() > 0.975) drops[i] = 0;
-      drops[i]++;
-    }
-  }
-
-  init();
-  window.addEventListener("resize", init);
-  setInterval(draw, 60);
-})();
+window.PHANTOM_IS_ADMIN = {{ 'true' if is_admin else 'false' }};
 
 // ─── Session Timer ───────────────────────────────────────────────────────
 (function () {
@@ -213,5 +178,49 @@ function toggleSidebar() {
 </script>
 
 {% block scripts %}{% endblock %}
+
+<script>
+// ─── Non-admin guard ─────────────────────────────────────────────────────────
+// Intercept any fetch/XHR that gets a 403 "Admin access required" and show
+// a clean flash banner instead of letting the progress UI stay visible.
+(function () {
+  if (window.PHANTOM_IS_ADMIN) return; // admins skip all of this
+
+  const _fetch = window.fetch;
+  window.fetch = async function (...args) {
+    const res = await _fetch(...args);
+    if (res.status === 403) {
+      // Clone so the original caller can still read the body
+      const clone = res.clone();
+      clone.json().then(function (data) {
+        const msg = (data && (data.message || data.error)) || "Admin access required to run scans.";
+        // Hide any in-progress UI the page might have shown
+        document.querySelectorAll(
+          ".scan-progress, .terminal-body, #scan-progress, #progress-section, .progress-section"
+        ).forEach(function (el) { el.style.display = "none"; });
+        // Show a prominent error banner
+        let banner = document.getElementById("_phantom_admin_banner");
+        if (!banner) {
+          banner = document.createElement("div");
+          banner.id = "_phantom_admin_banner";
+          banner.style.cssText = [
+            "position:fixed", "top:60px", "left:50%", "transform:translateX(-50%)",
+            "background:#1a0000", "border:1px solid #FF3E3E", "color:#FF3E3E",
+            "padding:0.9rem 1.6rem", "border-radius:8px", "font-size:0.9rem",
+            "font-family:'DM Mono',monospace", "z-index:9999",
+            "box-shadow:0 4px 24px rgba(255,62,62,0.25)",
+            "max-width:480px", "text-align:center", "line-height:1.5"
+          ].join(";");
+          document.body.appendChild(banner);
+        }
+        banner.innerHTML = "<strong>⛔ Access Denied</strong><br>" + msg;
+        banner.style.display = "block";
+        setTimeout(function () { banner.style.display = "none"; }, 6000);
+      }).catch(function () {});
+    }
+    return res;
+  };
+})();
+</script>
 </body>
 </html>
