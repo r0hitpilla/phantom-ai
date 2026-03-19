@@ -66,7 +66,7 @@ app.secret_key = SECRET_KEY
 # x_for=1  → trust 1 hop of X-Forwarded-For
 # x_proto=1 → trust X-Forwarded-Proto (http→https)
 # x_host=1  → trust X-Forwarded-Host
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 # ── Session security (OWASP A07) ──────────────────────────────────────────────
 IS_PRODUCTION = bool(
@@ -302,6 +302,11 @@ def _notify(job_id: str, override_email: str = None):
 # ---------------------------------------------------------------------------
 # Auth routes
 # ---------------------------------------------------------------------------
+
+@app.route("/health")
+def health():
+    return "OK", 200
+
 
 @app.route("/")
 def index():
