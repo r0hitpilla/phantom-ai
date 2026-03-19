@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% block title %}Job Queue{% endblock %}
+{% block breadcrumb %}<span>System</span> <span class="bc-sep">›</span> <span class="bc-active">Job Queue</span>{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+  <div class="page-header-icon high">▷</div>
+  <div class="page-header-text">
+    <h1 class="page-title">Job Queue</h1>
+    <p class="page-desc">All assessment jobs — live status, results, and PDF reports.</p>
+  </div>
+  <div style="margin-left:auto;">
+    <a href="/scheduler" class="btn btn-primary btn-scan" style="text-decoration:none;">
+      <span class="btn-scan-text">+ SCHEDULE SCAN</span>
+      <span class="btn-scan-line"></span>
+    </a>
+  </div>
+</div>
+
+<!-- Stats Row -->
+<div class="stats-row" id="queue-stats">
+  <div class="stat-card"><div class="stat-number" id="stat-total">—</div><div class="stat-label">Total Jobs</div><div class="stat-icon">◈</div></div>
+  <div class="stat-card"><div class="stat-number text-cyan" id="stat-running">—</div><div class="stat-label">Running</div><div class="stat-icon">▷</div></div>
+  <div class="stat-card"><div class="stat-number text-success" id="stat-completed">—</div><div class="stat-label">Completed</div><div class="stat-icon">✓</div></div>
+  <div class="stat-card"><div class="stat-number text-critical" id="stat-failed">—</div><div class="stat-label">Failed</div><div class="stat-icon">✗</div></div>
+</div>
+
+<!-- Filters -->
+<div class="card" style="margin-bottom:1rem;">
+  <div class="card-body" style="padding:0.8rem 1.2rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+    <span style="color:var(--text-muted);font-size:0.8rem;margin-right:0.5rem;">FILTER:</span>
+    <button class="filter-btn active" data-filter="all" onclick="setFilter('all',this)">All</button>
+    <button class="filter-btn" data-filter="running" onclick="setFilter('running',this)">Running</button>
+    <button class="filter-btn" data-filter="completed" onclick="setFilter('completed',this)">Completed</button>
+    <button class="filter-btn" data-filter="failed" onclick="setFilter('failed',this)">Failed</button>
+    <span style="margin-left:auto; color:var(--text-muted); font-size:0.75rem;" id="last-refresh">—</span>
+    <button class="btn btn-ghost" style="padding:0.3rem 0.8rem;font-size:0.8rem;" onclick="loadJobs()">Refresh</button>
+  </div>
+</div>
+
+<!-- Jobs Table -->
+<div class="table-card" id="jobs-container">
+  <div class="empty-state" style="padding:3rem;">
+    <div class="empty-icon">▷</div>
+    <div class="empty-title">Loading jobs...</div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<style>
+.filter-btn {
+  padding: 0.3rem 0.9rem;
+  border-radius: 20px;
+  border: 1px solid rgba(0,212,255,0.2);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  font-family: 'DM Mono', monospace;
+  transition: all 0.15s;
+}
+.filter-btn:hover, .filter-btn.active {
+  background: rgba(0,212,255,0.1);
+  border-color: rgba(0,212,255,0.4);
+  color: var(--text-accent);
+}
+.job-row-progress {
+  width: 80px;
+  display: inline-block;
+  vertical-align: middle;
+}
+.action-link {
+  color: var(--text-accent);
+  font-size: 0.78rem;
+  text-decoration: none;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid rgba(0,212,255,0.2);
+  border-radius: 4px;
+  font-family: 'DM Mono', monospace;
+  transition: all 0.15s;
+}
+.action-link:hover { background: rgba(0,212,255,0.1); }
+.action-link.pdf { color: #FF3E3E; border-color: rgba(255,62,62,0.3); }
+.action-link.pdf:hover { background: rgba(255,62,62,0.08); }
+</style>
+
+<script>
+let currentFilter = "all";
+let autoRefreshTimer = null;
+let allJobs = [];
+
+function setFilter(filter, btn) {
+  currentFilter = filter;
+  document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  renderTable(allJobs);
+}
+
+function loadJobs() {
+  fetch("/api/jobs")
+    .then(r => r.json())
+    .then(jobs => {
+      allJobs = jobs;
+      renderStats(jobs);
+      renderTable(jobs);
+      document.getElementById("last-refresh").textContent =
+        "Last refresh: " + new Date().toLocaleTimeString();
+    })
+    .catch(() => {});
+}
+
+function renderStats(jobs) {
+  document.getElementById("stat-total").textContent = jobs.length;
+  document.getElementById("stat-running").textContent = jobs.filter(j => j.status === "running").length;
+  document.getElementById("stat-completed").textContent = jobs.filter(j => j.status === "completed").length;
+  document.getElementById("stat-failed").textContent = jobs.filter(j => j.status === "failed").length;
+}
+
+function renderTable(jobs) {
+  const filtered = currentFilter === "all" ? jobs : jobs.filter(j => j.status === currentFilter);
+  const container = document.getElementById("jobs-container");
+
+  if (filtered.length === 0) {
+    container.innerHTML = `<div class="empty-state" style="padding:3rem;">
+      <div class="empty-icon">◈</div>
+      <div class="empty-title">No ${currentFilter === "all" ? "" : currentFilter} jobs</div>
+      <div class="empty-desc">Start an assessment from any module page.</div>
+      <a href="/dashboard" class="btn btn-primary" style="margin-top:1rem;text-decoration:none;display:inline-block;">Go to Dashboard</a>
+    </div>`;
+    return;
+  }
+
+  const rows = filtered.map(j => {
+    const riskScore = j.risk_score != null
+      ? `<span class="risk-score-pill ${riskClass(j.risk_score)}">${j.risk_score}/100</span>`
+      : "<span class='text-muted'>—</span>";
+
+    const pdfLink = j.status === "completed"
+      ? `<a href="/api/report/${j.job_id}" class="action-link pdf" target="_blank">PDF</a>`
+      : "<span class='text-muted'>—</span>";
+
+    const moduleLink = moduleUrl(j.module);
+    const viewLink = j.status === "completed" && moduleLink
+      ? `<a href="${moduleLink}" class="action-link">View</a>`
+      : "";
+
+    const progressBar = j.status === "running"
+      ? `<div class="mini-progress job-row-progress"><div class="mini-progress-bar" style="width:${j.progress}%"></div></div> <span class="progress-text">${j.progress}%</span>`
+      : `<span class="progress-text ${j.status === 'completed' ? 'text-success' : ''}">${j.status === 'completed' ? '100%' : j.status === 'failed' ? 'FAILED' : j.progress + '%'}</span>`;
+
+    return `<tr>
+      <td><code class="job-id">${j.job_id.substring(0, 8)}…</code></td>
+      <td><span class="module-tag">${j.module || '—'}</span></td>
+      <td><span class="target-domain" title="${j.target || ''}">${(j.target || '—').substring(0, 40)}${(j.target||'').length > 40 ? '…' : ''}</span></td>
+      <td><span class="status-badge status-${j.status}">${j.status === 'running' ? '<span class="spinner-tiny"></span>' : ''}${(j.status || '').toUpperCase()}</span></td>
+      <td>${progressBar}</td>
+      <td>${riskScore}</td>
+      <td><span class="timestamp">${(j.created_at || '—').substring(0, 16).replace('T', ' ')}</span></td>
+      <td style="display:flex;gap:0.4rem;align-items:center;">${viewLink} ${pdfLink}</td>
+    </tr>`;
+  }).join("");
+
+  container.innerHTML = `<table class="data-table">
+    <thead><tr>
+      <th>Job ID</th><th>Module</th><th>Target</th><th>Status</th>
+      <th>Progress</th><th>Risk Score</th><th>Started</th><th>Actions</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+function riskClass(score) {
+  if (score >= 75) return "critical";
+  if (score >= 50) return "high";
+  if (score >= 25) return "medium";
+  return "low";
+}
+
+function moduleUrl(module) {
+  const map = {
+    "AI Scanner": "/module/scanner",
+    "Deepfake Simulator": "/module/deepfake",
+    "Red Team Agent": "/module/redteam",
+    "Supply Chain Scanner": "/module/supplychain",
+    "Cognitive Profiler": "/module/cognitive",
+    "AppSec Tester": "/module/appsec",
+  };
+  return map[module] || null;
+}
+
+// Initial load + auto-refresh every 8 seconds
+loadJobs();
+autoRefreshTimer = setInterval(() => {
+  if (allJobs.some(j => j.status === "running")) loadJobs();
+}, 8000);
+</script>
+{% endblock %}

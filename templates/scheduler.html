@@ -1,0 +1,327 @@
+{% extends "base.html" %}
+{% block title %}Scheduler{% endblock %}
+{% block breadcrumb %}<span>System</span> <span class="bc-sep">›</span> <span class="bc-active">Scheduler</span>{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+  <div class="page-header-icon medium">⏱</div>
+  <div class="page-header-text">
+    <h1 class="page-title">Scan Scheduler</h1>
+    <p class="page-desc">Schedule security assessments to run automatically. You will receive an email with the PDF report when the scan completes.</p>
+  </div>
+</div>
+
+{% if not email_configured %}
+<div class="warning-banner" style="margin-bottom:1.5rem;">
+  <span class="warning-icon">⚠</span>
+  <strong>Email not configured.</strong> Set <code>SMTP_USER</code>, <code>SMTP_PASS</code>, <code>NOTIFY_EMAIL</code>, and <code>APP_URL</code> in Railway environment variables to receive email notifications.
+  <a href="https://myaccount.google.com/apppasswords" target="_blank" style="color:var(--text-accent);margin-left:0.5rem;">Get Gmail App Password →</a>
+</div>
+{% endif %}
+
+<div style="display:grid; grid-template-columns: 1fr 1.4fr; gap:1.5rem; align-items:start;">
+
+<!-- Schedule Form -->
+<div class="card">
+  <div class="card-header">
+    <h2 class="card-title">New Scheduled Scan</h2>
+    <span class="card-badge">AUTHORIZATION REQUIRED</span>
+  </div>
+  <div class="card-body">
+
+    <div class="form-group" style="margin-bottom:1.2rem;">
+      <label class="form-label">Module</label>
+      <select id="sched-module" class="form-input" onchange="updateTargetLabel()">
+        <option value="appsec">Module 06 — AppSec Tester (URL)</option>
+        <option value="scanner">Module 01 — AI Scanner (Domain)</option>
+        <option value="redteam">Module 03 — Red Team Agent (Domain)</option>
+        <option value="supplychain">Module 04 — Supply Chain Scanner (Domain)</option>
+      </select>
+    </div>
+
+    <div class="form-group" style="margin-bottom:1.2rem;">
+      <label class="form-label" id="target-label">Application URL</label>
+      <input type="text" id="sched-target" class="form-input font-mono" placeholder="https://example.com" />
+      <div class="form-hint" id="target-hint">Full URL including https://</div>
+    </div>
+
+    <div class="form-group" style="margin-bottom:1.2rem;">
+      <label class="form-label">Notify Email</label>
+      <input type="email" id="sched-email" class="form-input" placeholder="you@example.com"
+        value="{{ notify_email }}" />
+      <div class="form-hint">Overrides the default NOTIFY_EMAIL for this job.</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.8rem;margin-bottom:1.2rem;">
+      <div class="form-group">
+        <label class="form-label">Date</label>
+        <input type="date" id="sched-date" class="form-input" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Time (UTC)</label>
+        <input type="time" id="sched-time" class="form-input" />
+      </div>
+    </div>
+
+    <div class="form-group" style="margin-bottom:1.5rem;">
+      <label class="form-label">Scan Depth</label>
+      <div class="option-buttons">
+        <button class="option-btn active" data-value="standard" onclick="selectDepth(this)">Standard</button>
+        <button class="option-btn" data-value="deep" onclick="selectDepth(this)">Deep</button>
+        <button class="option-btn" data-value="stealth" onclick="selectDepth(this)">Quick</button>
+      </div>
+    </div>
+
+    <div class="auth-checkbox-wrap" style="margin-bottom:1.5rem;">
+      <label class="checkbox-label">
+        <input type="checkbox" id="sched-auth" class="checkbox-input" />
+        <span class="checkbox-custom"></span>
+        <span class="checkbox-text"><strong>I confirm I own this system or have written authorization to test it.</strong></span>
+      </label>
+    </div>
+
+    <div style="display:flex;gap:0.8rem;">
+      <button class="btn btn-primary btn-scan" style="flex:1;" onclick="scheduleJob()">
+        <span class="btn-scan-text">SCHEDULE SCAN</span>
+        <span class="btn-scan-line"></span>
+      </button>
+      <button class="btn btn-outline" onclick="runNow()">RUN NOW</button>
+    </div>
+
+    <div id="sched-feedback" style="margin-top:1rem;display:none;"></div>
+  </div>
+</div>
+
+<!-- Scheduled Jobs -->
+<div>
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">Scheduled Jobs</h2>
+      <span class="card-badge" id="sched-count">0 PENDING</span>
+    </div>
+    <div class="card-body" id="scheduled-list" style="padding:0;">
+      <div class="empty-state" style="padding:2.5rem;">
+        <div class="empty-icon">⏱</div>
+        <div class="empty-title">No scheduled scans</div>
+        <div class="empty-desc">Use the form to schedule your first automated scan.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:1rem;">
+    <div class="card-header">
+      <h2 class="card-title">Email Configuration</h2>
+    </div>
+    <div class="card-body">
+      <div class="config-status-row">
+        <span class="config-label">SMTP Status</span>
+        <span class="config-value {% if email_configured %}text-success{% else %}text-critical{% endif %}">
+          {% if email_configured %}Configured ✓{% else %}Not configured ✗{% endif %}
+        </span>
+      </div>
+      <div class="config-status-row">
+        <span class="config-label">Notify To</span>
+        <span class="config-value font-mono">{{ notify_email or "Not set" }}</span>
+      </div>
+      <div class="config-status-row">
+        <span class="config-label">App URL</span>
+        <span class="config-value font-mono">{{ app_url }}</span>
+      </div>
+      {% if not email_configured %}
+      <div style="margin-top:1rem;padding:0.8rem;background:rgba(0,0,0,0.2);border-radius:6px;font-size:0.8rem;color:var(--text-muted);font-family:'DM Mono',monospace;line-height:1.8;">
+        Set in Railway → Variables:<br/>
+        SMTP_USER = your.gmail@gmail.com<br/>
+        SMTP_PASS = xxxx xxxx xxxx xxxx<br/>
+        NOTIFY_EMAIL = recipient@email.com<br/>
+        APP_URL = https://your-app.up.railway.app
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+</div><!-- /grid -->
+
+{% endblock %}
+
+{% block scripts %}
+<style>
+.config-status-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  font-size: 0.85rem;
+}
+.config-status-row:last-child { border-bottom: none; }
+.config-label { color: var(--text-muted); }
+.config-value { color: var(--text-primary); }
+.sched-job-card {
+  padding: 1rem 1.4rem;
+  border-bottom: 1px solid rgba(0,212,255,0.06);
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+.sched-job-card:last-child { border-bottom: none; }
+.sched-job-info { flex: 1; }
+.sched-job-module { font-weight: 700; font-size: 0.88rem; color: var(--text-primary); }
+.sched-job-target { font-family: 'DM Mono', monospace; font-size: 0.78rem; color: var(--text-accent); }
+.sched-job-time { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem; }
+.cancel-btn {
+  background: rgba(255,62,62,0.08);
+  border: 1px solid rgba(255,62,62,0.2);
+  color: #FF3E3E;
+  padding: 0.25rem 0.7rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  font-family: 'DM Mono', monospace;
+}
+.cancel-btn:hover { background: rgba(255,62,62,0.15); }
+</style>
+
+<script>
+let schedDepth = "standard";
+
+// Set default date/time to now + 10 minutes
+(function() {
+  const now = new Date();
+  now.setMinutes(now.getMinutes() + 10);
+  const dateStr = now.toISOString().split("T")[0];
+  const timeStr = now.toISOString().split("T")[1].substring(0, 5);
+  document.getElementById("sched-date").value = dateStr;
+  document.getElementById("sched-time").value = timeStr;
+})();
+
+function selectDepth(btn) {
+  document.querySelectorAll(".option-btn").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  schedDepth = btn.dataset.value;
+}
+
+function updateTargetLabel() {
+  const module = document.getElementById("sched-module").value;
+  const isDomain = ["scanner", "redteam", "supplychain"].includes(module);
+  document.getElementById("target-label").textContent = isDomain ? "Target Domain" : "Application URL";
+  document.getElementById("target-hint").textContent = isDomain
+    ? "Domain only — no http:// (e.g. example.com)"
+    : "Full URL including https:// (e.g. https://example.com)";
+  document.getElementById("sched-target").placeholder = isDomain ? "example.com" : "https://example.com";
+}
+
+function getPayload() {
+  return {
+    module: document.getElementById("sched-module").value,
+    target: document.getElementById("sched-target").value.trim(),
+    notify_email: document.getElementById("sched-email").value.trim(),
+    scan_depth: schedDepth,
+    run_at: document.getElementById("sched-date").value + "T" + document.getElementById("sched-time").value + ":00",
+    authorized: document.getElementById("sched-auth").checked,
+  };
+}
+
+function scheduleJob() {
+  const p = getPayload();
+  if (!p.target) { showFeedback("Enter a target URL or domain.", "error"); return; }
+  if (!p.authorized) { showFeedback("You must confirm authorization.", "error"); return; }
+  if (!p.run_at || p.run_at === "T:00") { showFeedback("Select a date and time.", "error"); return; }
+
+  fetch("/api/scheduler/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(p),
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) { showFeedback(data.error, "error"); return; }
+      showFeedback("Scan scheduled for " + p.run_at.replace("T", " ") + " UTC", "success");
+      loadScheduled();
+    })
+    .catch(e => showFeedback("Error: " + e, "error"));
+}
+
+function runNow() {
+  const p = getPayload();
+  if (!p.target) { showFeedback("Enter a target URL or domain.", "error"); return; }
+  if (!p.authorized) { showFeedback("You must confirm authorization.", "error"); return; }
+  p.run_at = null; // run immediately
+
+  fetch("/api/scheduler/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(p),
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) { showFeedback(data.error, "error"); return; }
+      showFeedback("Scan started! Job ID: " + (data.job_id || "").substring(0, 8) + "…", "success");
+      setTimeout(() => window.location.href = "/jobs", 1500);
+    })
+    .catch(e => showFeedback("Error: " + e, "error"));
+}
+
+function cancelScheduled(schedId) {
+  fetch("/api/scheduler/cancel/" + schedId, { method: "DELETE" })
+    .then(r => r.json())
+    .then(() => loadScheduled())
+    .catch(() => {});
+}
+
+function loadScheduled() {
+  fetch("/api/scheduler/list")
+    .then(r => r.json())
+    .then(data => {
+      const list = document.getElementById("scheduled-list");
+      const pending = data.filter(j => j.status === "pending");
+      document.getElementById("sched-count").textContent = pending.length + " PENDING";
+
+      if (data.length === 0) {
+        list.innerHTML = `<div class="empty-state" style="padding:2.5rem;">
+          <div class="empty-icon">⏱</div>
+          <div class="empty-title">No scheduled scans</div>
+        </div>`;
+        return;
+      }
+
+      list.innerHTML = data.map(j => `
+        <div class="sched-job-card">
+          <div class="sched-job-info">
+            <div class="sched-job-module">${moduleLabel(j.module)}</div>
+            <div class="sched-job-target">${j.target}</div>
+            <div class="sched-job-time">
+              ${j.run_at ? "Scheduled: " + j.run_at.replace("T", " ").substring(0, 16) + " UTC" : "Run immediately"}
+              &nbsp;·&nbsp; ${j.scan_depth || "standard"}
+            </div>
+          </div>
+          <span class="status-badge status-${j.status}">${j.status.toUpperCase()}</span>
+          ${j.status === "pending"
+            ? `<button class="cancel-btn" onclick="cancelScheduled('${j.sched_id}')">Cancel</button>`
+            : ""}
+        </div>
+      `).join("");
+    });
+}
+
+function moduleLabel(m) {
+  return {
+    appsec: "AppSec Tester",
+    scanner: "AI Scanner",
+    redteam: "Red Team Agent",
+    supplychain: "Supply Chain Scanner",
+  }[m] || m;
+}
+
+function showFeedback(msg, type) {
+  const el = document.getElementById("sched-feedback");
+  el.style.display = "block";
+  el.className = "flash flash-" + type;
+  el.textContent = msg;
+  if (type === "success") setTimeout(() => { el.style.display = "none"; }, 4000);
+}
+
+loadScheduled();
+setInterval(loadScheduled, 15000);
+</script>
+{% endblock %}

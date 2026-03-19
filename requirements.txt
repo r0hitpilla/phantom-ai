@@ -6,6 +6,6 @@ python-whois
 python-dotenv
 gunicorn
 fpdf2
-schedule
+apscheduler
 httpx
 beautifulsoup4

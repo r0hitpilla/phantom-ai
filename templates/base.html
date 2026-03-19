@@ -71,9 +71,13 @@
         <span class="nav-badge critical">6</span>
       </a>
       <div class="nav-divider">SYSTEM</div>
-      <a href="/api/jobs" class="nav-item" target="_blank">
+      <a href="/jobs" class="nav-item {% if request.endpoint == 'job_queue' %}active{% endif %}">
         <span class="nav-icon">▷</span>
         <span class="nav-label">Job Queue</span>
+      </a>
+      <a href="/scheduler" class="nav-item {% if request.endpoint == 'scheduler_page' %}active{% endif %}">
+        <span class="nav-icon">⏱</span>
+        <span class="nav-label">Scheduler</span>
       </a>
       <a href="/logout" class="nav-item nav-logout">
         <span class="nav-icon">⏻</span>

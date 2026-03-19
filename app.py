@@ -10,7 +10,7 @@ import os
 import threading
 import traceback
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import wraps
 
 from flask import (
@@ -25,8 +25,10 @@ from flask import (
     url_for,
 )
 
+from apscheduler.schedulers.background import BackgroundScheduler
 from config import SECRET_KEY
 from modules.appsec import AppSecScanner
+from utils.emailer import notifier
 from modules.cognitive import CognitiveProfiler
 from modules.deepfake import DeepfakeSimulator
 from modules.redteam import RedTeamAgent
@@ -45,6 +47,13 @@ jobs = {}
 
 # Campaign store (for deepfake module)
 campaigns = {}
+
+# Scheduled job store: {sched_id: {sched_id, module, target, run_at, status, job_id, ...}}
+scheduled_jobs = {}
+
+# APScheduler instance
+_scheduler = BackgroundScheduler(timezone="UTC")
+_scheduler.start()
 
 # ---------------------------------------------------------------------------
 # Auth helpers
@@ -79,6 +88,29 @@ def authorization_required(f):
             }), 403
         return f(*args, **kwargs)
     return decorated
+
+
+# ---------------------------------------------------------------------------
+# Email notification helper
+# ---------------------------------------------------------------------------
+
+def _notify(job_id: str, override_email: str = None):
+    """Send scan-complete email in a background thread."""
+    job = jobs.get(job_id)
+    if not job:
+        return
+    # Temporarily override notify_email if caller specified one
+    original = notifier.notify_email
+    if override_email:
+        notifier.notify_email = override_email
+    try:
+        threading.Thread(
+            target=notifier.send_scan_complete,
+            args=(job_id, job),
+            daemon=True,
+        ).start()
+    finally:
+        notifier.notify_email = original
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +235,7 @@ def scanner_start():
             jobs[job_id]["results"] = results
             jobs[job_id]["status"] = "completed"
             jobs[job_id]["progress"] = 100
+            _notify(job_id, jobs[job_id].get("notify_email"))
         except Exception as exc:
             traceback.print_exc()
             jobs[job_id]["status"] = "failed"
@@ -322,6 +355,7 @@ def deepfake_generate():
             }
             jobs[job_id]["status"] = "completed"
             jobs[job_id]["progress"] = 100
+            _notify(job_id, jobs[job_id].get("notify_email"))
         except Exception as exc:
             traceback.print_exc()
             jobs[job_id]["status"] = "failed"
@@ -447,6 +481,7 @@ def redteam_start():
             jobs[job_id]["results"] = results
             jobs[job_id]["status"] = "completed"
             jobs[job_id]["progress"] = 100
+            _notify(job_id, jobs[job_id].get("notify_email"))
         except Exception as exc:
             traceback.print_exc()
             jobs[job_id]["status"] = "failed"
@@ -536,6 +571,7 @@ def supplychain_scan():
             jobs[job_id]["results"] = results
             jobs[job_id]["status"] = "completed"
             jobs[job_id]["progress"] = 100
+            _notify(job_id, jobs[job_id].get("notify_email"))
         except Exception as exc:
             traceback.print_exc()
             jobs[job_id]["status"] = "failed"
@@ -628,6 +664,7 @@ def cognitive_profile():
             jobs[job_id]["results"] = results
             jobs[job_id]["status"] = "completed"
             jobs[job_id]["progress"] = 100
+            _notify(job_id, jobs[job_id].get("notify_email"))
         except Exception as exc:
             traceback.print_exc()
             jobs[job_id]["status"] = "failed"
@@ -721,6 +758,7 @@ def appsec_start():
             jobs[job_id]["results"] = results
             jobs[job_id]["status"] = "completed"
             jobs[job_id]["progress"] = 100
+            _notify(job_id, jobs[job_id].get("notify_email"))
         except Exception as exc:
             traceback.print_exc()
             jobs[job_id]["status"] = "failed"
@@ -924,6 +962,16 @@ def generate_report(job_id):
 
 
 # ---------------------------------------------------------------------------
+# Job Queue UI
+# ---------------------------------------------------------------------------
+
+@app.route("/jobs")
+@login_required
+def job_queue():
+    return render_template("jobs.html")
+
+
+# ---------------------------------------------------------------------------
 # API — Job listing
 # ---------------------------------------------------------------------------
 
@@ -938,11 +986,181 @@ def list_jobs():
             "status": jdata.get("status"),
             "progress": jdata.get("progress", 0),
             "created_at": jdata.get("created_at"),
+            "risk_score": (
+                jdata.get("results", {}).get("risk_score")
+                or jdata.get("results", {}).get("overall_vulnerability_score")
+            ) if jdata.get("results") else None,
         }
         for jid, jdata in jobs.items()
     ]
-    job_list.sort(key=lambda x: x["created_at"], reverse=True)
+    job_list.sort(key=lambda x: x["created_at"] or "", reverse=True)
     return jsonify(job_list)
+
+
+# ---------------------------------------------------------------------------
+# Scheduler
+# ---------------------------------------------------------------------------
+
+def _run_scheduled_job(sched_id: str):
+    """Called by APScheduler when a scheduled job fires."""
+    sched = scheduled_jobs.get(sched_id)
+    if not sched or sched["status"] != "pending":
+        return
+
+    sched["status"] = "running"
+    module = sched["module"]
+    target = sched["target"]
+    scan_depth = sched.get("scan_depth", "standard")
+    notify_email = sched.get("notify_email", "")
+
+    job_id = str(uuid.uuid4())
+    module_labels = {
+        "appsec": "AppSec Tester",
+        "scanner": "AI Scanner",
+        "redteam": "Red Team Agent",
+        "supplychain": "Supply Chain Scanner",
+    }
+    jobs[job_id] = {
+        "job_id": job_id,
+        "module": module_labels.get(module, module),
+        "target": target,
+        "status": "running",
+        "progress": 0,
+        "results": None,
+        "error": None,
+        "created_at": datetime.utcnow().isoformat(),
+        "notify_email": notify_email,
+        "sched_id": sched_id,
+    }
+    sched["job_id"] = job_id
+
+    def run():
+        try:
+            if module == "appsec":
+                scanner = AppSecScanner(target_url=target, authorization_token=job_id, scan_depth=scan_depth)
+            elif module == "scanner":
+                from modules.scanner import AIScanner
+                scanner = AIScanner(domain=target, authorization_token=job_id)
+            elif module == "redteam":
+                from modules.redteam import RedTeamAgent
+                scanner = RedTeamAgent(company_domain=target, industry="Technology", employee_count="100-500")
+            elif module == "supplychain":
+                from modules.supply_chain import SupplyChainScanner
+                scanner = SupplyChainScanner(domain=target, known_ai_tools=[])
+            else:
+                raise ValueError(f"Unknown module: {module}")
+
+            original_log = scanner._log
+            def patched_log(message, level="INFO"):
+                original_log(message, level)
+                jobs[job_id]["progress"] = scanner.progress
+                jobs[job_id]["progress_log"] = scanner.progress_log
+            scanner._log = patched_log
+
+            results = scanner.run_full_scan() if hasattr(scanner, "run_full_scan") else scanner.run_autonomous_scan()
+            jobs[job_id]["results"] = results
+            jobs[job_id]["status"] = "completed"
+            jobs[job_id]["progress"] = 100
+            _notify(job_id, notify_email)
+            sched["status"] = "completed"
+        except Exception as exc:
+            traceback.print_exc()
+            jobs[job_id]["status"] = "failed"
+            jobs[job_id]["error"] = str(exc)
+            sched["status"] = "failed"
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+@app.route("/scheduler")
+@login_required
+def scheduler_page():
+    return render_template(
+        "scheduler.html",
+        email_configured=notifier.is_configured(),
+        notify_email=notifier.notify_email,
+        app_url=notifier.app_url,
+    )
+
+
+@app.route("/api/scheduler/create", methods=["POST"])
+@login_required
+def scheduler_create():
+    data = request.get_json(silent=True) or {}
+    module = data.get("module", "").strip()
+    target = data.get("target", "").strip()
+    run_at_str = data.get("run_at")
+    scan_depth = data.get("scan_depth", "standard")
+    notify_email = data.get("notify_email", "").strip() or notifier.notify_email
+    authorized = data.get("authorized", False)
+
+    if not module or not target:
+        return jsonify({"error": "module and target are required"}), 400
+    if not authorized:
+        return jsonify({"error": "Authorization confirmation required"}), 403
+
+    sched_id = str(uuid.uuid4())
+    sched_entry = {
+        "sched_id": sched_id,
+        "module": module,
+        "target": target,
+        "scan_depth": scan_depth,
+        "notify_email": notify_email,
+        "run_at": run_at_str,
+        "status": "pending",
+        "job_id": None,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+
+    if not run_at_str:
+        # Run immediately
+        scheduled_jobs[sched_id] = sched_entry
+        _run_scheduled_job(sched_id)
+        return jsonify({"sched_id": sched_id, "job_id": scheduled_jobs[sched_id].get("job_id"), "status": "started"})
+
+    # Parse scheduled time and add to APScheduler
+    try:
+        run_at = datetime.fromisoformat(run_at_str).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return jsonify({"error": f"Invalid run_at format: {run_at_str}. Use YYYY-MM-DDTHH:MM:SS"}), 400
+
+    if run_at <= datetime.now(timezone.utc):
+        return jsonify({"error": "Scheduled time must be in the future"}), 400
+
+    scheduled_jobs[sched_id] = sched_entry
+    _scheduler.add_job(
+        _run_scheduled_job,
+        trigger="date",
+        run_date=run_at,
+        args=[sched_id],
+        id=sched_id,
+    )
+
+    return jsonify({"sched_id": sched_id, "status": "scheduled", "run_at": run_at_str})
+
+
+@app.route("/api/scheduler/list")
+@login_required
+def scheduler_list():
+    items = sorted(scheduled_jobs.values(), key=lambda x: x["created_at"], reverse=True)
+    return jsonify(items)
+
+
+@app.route("/api/scheduler/cancel/<sched_id>", methods=["DELETE"])
+@login_required
+def scheduler_cancel(sched_id):
+    sched = scheduled_jobs.get(sched_id)
+    if not sched:
+        return jsonify({"error": "Scheduled job not found"}), 404
+    if sched["status"] != "pending":
+        return jsonify({"error": "Only pending jobs can be cancelled"}), 400
+
+    try:
+        _scheduler.remove_job(sched_id)
+    except Exception:
+        pass
+    sched["status"] = "cancelled"
+    return jsonify({"status": "cancelled"})
 
 
 # ---------------------------------------------------------------------------
