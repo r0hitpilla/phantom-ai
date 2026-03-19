@@ -471,7 +471,7 @@ def dashboard():
         "critical_findings": sum(
             1
             for j in jobs.values()
-            if j.get("results", {}).get("risk_score", 0) >= 75
+            if (j.get("results") or {}).get("risk_score", 0) >= 75
         ),
         "companies_protected": len(set(j.get("target", "") for j in jobs.values() if j.get("target"))),
     }
@@ -1309,8 +1309,8 @@ def list_jobs():
             "progress": jdata.get("progress", 0),
             "created_at": jdata.get("created_at"),
             "risk_score": (
-                jdata.get("results", {}).get("risk_score")
-                or jdata.get("results", {}).get("overall_vulnerability_score")
+                (jdata.get("results") or {}).get("risk_score")
+                or (jdata.get("results") or {}).get("overall_vulnerability_score")
             ) if jdata.get("results") else None,
         }
         for jid, jdata in jobs.items()
