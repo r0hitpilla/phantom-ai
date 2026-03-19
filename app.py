@@ -26,6 +26,7 @@ from flask import (
 )
 
 from config import SECRET_KEY
+from modules.appsec import AppSecScanner
 from modules.cognitive import CognitiveProfiler
 from modules.deepfake import DeepfakeSimulator
 from modules.redteam import RedTeamAgent
@@ -668,6 +669,99 @@ def cognitive_results(job_id):
 
 
 # ---------------------------------------------------------------------------
+# Module 6 — Application Security Tester
+# ---------------------------------------------------------------------------
+
+@app.route("/module/appsec")
+@login_required
+def module_appsec():
+    return render_template("appsec.html")
+
+
+@app.route("/api/appsec/start", methods=["POST"])
+@login_required
+@authorization_required
+def appsec_start():
+    data = request.get_json(silent=True) or {}
+    target_url = data.get("url", "").strip()
+    scan_depth = data.get("scan_depth", "standard")
+
+    if not target_url:
+        return jsonify({"error": "Application URL is required"}), 400
+
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {
+        "job_id": job_id,
+        "module": "AppSec Tester",
+        "target": target_url,
+        "status": "running",
+        "progress": 0,
+        "results": None,
+        "error": None,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+
+    def run_scan():
+        try:
+            scanner = AppSecScanner(
+                target_url=target_url,
+                authorization_token=job_id,
+                scan_depth=scan_depth,
+            )
+
+            original_log = scanner._log
+
+            def patched_log(message, level="INFO"):
+                original_log(message, level)
+                jobs[job_id]["progress"] = scanner.progress
+                jobs[job_id]["progress_log"] = scanner.progress_log
+
+            scanner._log = patched_log
+            results = scanner.run_full_scan()
+            jobs[job_id]["results"] = results
+            jobs[job_id]["status"] = "completed"
+            jobs[job_id]["progress"] = 100
+        except Exception as exc:
+            traceback.print_exc()
+            jobs[job_id]["status"] = "failed"
+            jobs[job_id]["error"] = str(exc)
+
+    thread = threading.Thread(target=run_scan, daemon=True)
+    thread.start()
+
+    return jsonify({"job_id": job_id, "status": "started"})
+
+
+@app.route("/api/appsec/status/<job_id>")
+@login_required
+def appsec_status(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify({
+        "job_id": job_id,
+        "status": job["status"],
+        "progress": job.get("progress", 0),
+        "progress_log": job.get("progress_log", [])[-15:],
+        "error": job.get("error"),
+    })
+
+
+@app.route("/api/appsec/results/<job_id>")
+@login_required
+def appsec_results(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    if job["status"] != "completed":
+        return jsonify({
+            "status": job["status"],
+            "progress": job.get("progress", 0),
+        }), 202
+    return jsonify(job["results"])
+
+
+# ---------------------------------------------------------------------------
 # Reports
 # ---------------------------------------------------------------------------
 
@@ -761,6 +855,52 @@ def generate_report(job_id):
             "PHANTOM AI — This report is confidential and for authorized security testing use only.",
             new_x="LMARGIN", new_y="NEXT", align="C"
         )
+
+        # AppSec Tester — per-finding structured report
+        if module == "AppSec Tester":
+            findings = results.get("findings", [])
+            sev_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+            findings_sorted = sorted(findings, key=lambda f: sev_order.get(f.get("severity", "INFO"), 5))
+
+            for i, finding in enumerate(findings_sorted, 1):
+                pdf.add_page()
+                sev = finding.get("severity", "INFO")
+                sev_colors = {
+                    "CRITICAL": (255, 62, 62),
+                    "HIGH": (255, 140, 0),
+                    "MEDIUM": (200, 165, 0),
+                    "LOW": (0, 180, 90),
+                    "INFO": (0, 180, 220),
+                }
+                r_col, g_col, b_col = sev_colors.get(sev, (150, 150, 150))
+
+                # Finding header
+                pdf.set_fill_color(r_col, g_col, b_col)
+                pdf.set_text_color(255, 255, 255)
+                pdf.set_font("Helvetica", "B", 10)
+                pdf.cell(0, 8,
+                    f"Finding #{i:02d} — {sev} — {_sanitize_for_pdf(finding.get('category', 'Unknown'))}",
+                    new_x="LMARGIN", new_y="NEXT", fill=True
+                )
+
+                pdf.set_text_color(30, 30, 30)
+                fields = [
+                    ("Affected URL / Service", finding.get("affected_url", "—")),
+                    ("Observations", finding.get("observations", "—")),
+                    ("Business Risk", finding.get("business_risk", "—")),
+                    ("Technical Impact", finding.get("impact", "—")),
+                    ("Recommendations", finding.get("recommendations", "—")),
+                    ("Industry Standards Mapping", finding.get("standards_mapping", "—")),
+                    ("CWE Mapping", finding.get("cwe_mapping", "—")),
+                ]
+                for label, value in fields:
+                    pdf.ln(3)
+                    pdf.set_font("Helvetica", "B", 9)
+                    pdf.set_text_color(0, 100, 180)
+                    pdf.cell(0, 6, label, new_x="LMARGIN", new_y="NEXT")
+                    pdf.set_font("Helvetica", "", 9)
+                    pdf.set_text_color(40, 40, 40)
+                    pdf.multi_cell(0, 5, _sanitize_for_pdf(str(value)))
 
         # Generate PDF bytes
         pdf_bytes = pdf.output()
@@ -865,6 +1005,16 @@ def _extract_stats_for_pdf(results: dict, module: str) -> list:
         stats.append(f"Overall Vulnerability Score: {results.get('overall_vulnerability_score', 0)}/100")
         critical = sum(1 for p in results.get('profiles', []) if p.get('training_priority') == 'CRITICAL')
         stats.append(f"Critical Training Priority: {critical} employees")
+    elif module == "AppSec Tester":
+        counts = results.get("findings_count", {})
+        stats.append(f"Total Findings: {sum(counts.values())}")
+        stats.append(f"Critical: {counts.get('critical', 0)}")
+        stats.append(f"High: {counts.get('high', 0)}")
+        stats.append(f"Medium: {counts.get('medium', 0)}")
+        stats.append(f"Low: {counts.get('low', 0)}")
+        tech = results.get("tech_stack", {})
+        if tech:
+            stats.append(f"Tech Stack: {', '.join(f'{k}: {v}' for k, v in tech.items())}")
     return stats
 
 

@@ -1,0 +1,456 @@
+{% extends "base.html" %}
+
+{% block title %}Application Security Tester{% endblock %}
+{% block breadcrumb %}<span>Modules</span> <span class="bc-sep">›</span> <span class="bc-active">AppSec Tester</span>{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+  <div class="page-header-icon critical">✦</div>
+  <div class="page-header-text">
+    <h1 class="page-title">Application Security Tester <span class="module-num-tag">MODULE 06</span></h1>
+    <p class="page-desc">Enter a URL to run a comprehensive A–Z vulnerability assessment. Claude AI analyzes HTTP responses, headers, cookies, and tech stack to generate a professional pen-test report.</p>
+  </div>
+</div>
+
+<!-- Config Card -->
+<div class="card" id="appsec-config-card">
+  <div class="card-header">
+    <h2 class="card-title">Target Configuration</h2>
+    <span class="card-badge">REQUIRES AUTHORIZATION</span>
+  </div>
+  <div class="card-body">
+    <div class="form-row">
+      <div class="form-group flex-1">
+        <label class="form-label" for="appsec-url">Application URL</label>
+        <input
+          type="text"
+          id="appsec-url"
+          class="form-input font-mono"
+          placeholder="https://example.com"
+        />
+        <div class="form-hint">Full URL including https://. Subpaths accepted (e.g. https://app.example.com/portal).</div>
+      </div>
+    </div>
+
+    <div class="scan-options" style="margin-top:1.2rem;">
+      <label class="option-label">Scan Depth</label>
+      <div class="option-buttons">
+        <button class="option-btn active" data-value="standard">Standard (12 findings)</button>
+        <button class="option-btn" data-value="deep">Deep (20 findings)</button>
+        <button class="option-btn" data-value="stealth">Quick (7 findings)</button>
+      </div>
+    </div>
+
+    <div class="auth-checkbox-wrap" style="margin-top:1.5rem;">
+      <label class="checkbox-label">
+        <input type="checkbox" id="appsec-auth-confirm" class="checkbox-input" />
+        <span class="checkbox-custom"></span>
+        <span class="checkbox-text">
+          <strong>I confirm I own this application OR have written authorization to perform security testing on it.</strong>
+          Unauthorized testing violates the CFAA and equivalent laws.
+        </span>
+      </label>
+    </div>
+
+    <button class="btn btn-primary btn-scan" id="start-appsec-btn" onclick="startAppSec()">
+      <span class="btn-scan-text">START SECURITY ASSESSMENT</span>
+      <span class="btn-scan-line"></span>
+    </button>
+  </div>
+</div>
+
+<!-- Progress Card -->
+<div class="card hidden" id="appsec-progress-card">
+  <div class="card-header">
+    <h2 class="card-title">
+      <span class="spinner-small"></span>
+      Assessment In Progress
+    </h2>
+    <span class="card-badge" id="appsec-progress-pct">0%</span>
+  </div>
+  <div class="card-body">
+    <div class="progress-bar-wrap">
+      <div class="progress-bar scanning" id="appsec-progress-bar" style="width:0%"></div>
+    </div>
+    <div class="terminal-box" id="appsec-terminal">
+      <div class="terminal-line">[PHANTOM AI] Initializing application security assessment...</div>
+    </div>
+  </div>
+</div>
+
+<!-- Results -->
+<div class="hidden" id="appsec-results-panel">
+
+  <!-- Risk Hero -->
+  <div class="risk-hero-card" id="appsec-risk-hero">
+    <div class="risk-hero-left">
+      <div class="risk-score-circle" id="appsec-risk-circle">
+        <div class="risk-score-num" id="appsec-risk-num">—</div>
+        <div class="risk-score-label">/ 100</div>
+      </div>
+    </div>
+    <div class="risk-hero-right">
+      <h2 class="risk-hero-title">Application Security Risk Score</h2>
+      <div class="risk-hero-domain" id="appsec-risk-url">—</div>
+      <div class="appsec-sev-row" id="appsec-sev-row"></div>
+    </div>
+    <div class="risk-hero-actions">
+      <button class="btn btn-outline" onclick="downloadAppSecReport()">Download PDF Report</button>
+      <button class="btn btn-ghost" onclick="resetAppSec()">New Scan</button>
+    </div>
+  </div>
+
+  <!-- Executive Summary -->
+  <div class="card" id="appsec-summary-card">
+    <div class="card-header">
+      <h2 class="card-title">Executive Summary</h2>
+      <span class="card-badge">CLAUDE ANALYSIS</span>
+    </div>
+    <div class="card-body">
+      <div class="findings-text" id="appsec-summary-text"></div>
+    </div>
+  </div>
+
+  <!-- Findings Table -->
+  <div class="card" id="appsec-findings-card">
+    <div class="card-header">
+      <h2 class="card-title">Vulnerability Findings</h2>
+      <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+        <span class="card-badge critical" id="appsec-crit-count">0 CRITICAL</span>
+        <span class="card-badge high" id="appsec-high-count">0 HIGH</span>
+        <span class="card-badge medium" id="appsec-med-count">0 MEDIUM</span>
+        <span class="card-badge low" id="appsec-low-count">0 LOW</span>
+      </div>
+    </div>
+    <div class="card-body" style="padding:0;">
+      <div id="appsec-findings-list"></div>
+    </div>
+  </div>
+
+</div><!-- /#appsec-results-panel -->
+
+{% endblock %}
+
+{% block scripts %}
+<style>
+.appsec-finding {
+  border-bottom: 1px solid rgba(0,212,255,0.08);
+  transition: background 0.15s;
+}
+.appsec-finding:last-child { border-bottom: none; }
+.appsec-finding-header {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 1rem 1.4rem;
+  cursor: pointer;
+  user-select: none;
+}
+.appsec-finding-header:hover { background: rgba(0,212,255,0.04); }
+.appsec-finding-num {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  min-width: 28px;
+}
+.appsec-finding-cat {
+  flex: 1;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.appsec-finding-toggle {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  transition: transform 0.2s;
+}
+.appsec-finding.expanded .appsec-finding-toggle { transform: rotate(180deg); }
+.appsec-finding-body {
+  display: none;
+  padding: 0 1.4rem 1.4rem 1.4rem;
+}
+.appsec-finding.expanded .appsec-finding-body { display: block; }
+.appsec-field { margin-bottom: 1rem; }
+.appsec-field-label {
+  font-size: 0.72rem;
+  font-family: 'DM Mono', monospace;
+  color: var(--text-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.3rem;
+}
+.appsec-field-value {
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  background: rgba(0,0,0,0.2);
+  border: 1px solid rgba(0,212,255,0.08);
+  border-radius: 6px;
+  padding: 0.7rem 0.9rem;
+}
+.appsec-field-value code {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.82rem;
+  color: var(--text-accent);
+  background: rgba(0,212,255,0.06);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+}
+.appsec-field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+@media (max-width: 700px) { .appsec-field-grid { grid-template-columns: 1fr; } }
+.appsec-sev-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+}
+.appsec-sev-pill {
+  padding: 0.2rem 0.7rem;
+  border-radius: 20px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  font-family: 'DM Mono', monospace;
+}
+.appsec-sev-pill.critical { background: rgba(255,62,62,0.15); color: #FF3E3E; border: 1px solid rgba(255,62,62,0.3); }
+.appsec-sev-pill.high { background: rgba(255,140,0,0.12); color: #FF8C00; border: 1px solid rgba(255,140,0,0.25); }
+.appsec-sev-pill.medium { background: rgba(255,215,0,0.1); color: #FFD700; border: 1px solid rgba(255,215,0,0.25); }
+.appsec-sev-pill.low { background: rgba(0,255,136,0.08); color: #00FF88; border: 1px solid rgba(0,255,136,0.2); }
+.appsec-sev-pill.info { background: rgba(0,212,255,0.08); color: #00D4FF; border: 1px solid rgba(0,212,255,0.2); }
+.affected-url-chip {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.78rem;
+  color: var(--text-accent);
+  word-break: break-all;
+}
+</style>
+
+<script>
+let appsecJobId = null;
+let appsecPollInterval = null;
+let appsecDepth = "standard";
+
+document.querySelectorAll(".option-btn").forEach(btn => {
+  btn.addEventListener("click", function() {
+    document.querySelectorAll(".option-btn").forEach(b => b.classList.remove("active"));
+    this.classList.add("active");
+    appsecDepth = this.dataset.value;
+  });
+});
+
+function startAppSec() {
+  const url = document.getElementById("appsec-url").value.trim();
+  const authorized = document.getElementById("appsec-auth-confirm").checked;
+
+  if (!url) { showAlert("Please enter the application URL.", "error"); return; }
+  if (!authorized) { showAlert("You must confirm authorization before testing.", "error"); return; }
+
+  document.getElementById("appsec-config-card").classList.add("hidden");
+  document.getElementById("appsec-progress-card").classList.remove("hidden");
+  document.getElementById("appsec-results-panel").classList.add("hidden");
+
+  fetch("/api/appsec/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: url, authorized: true, scan_depth: appsecDepth }),
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) { showAlert(data.error, "error"); return; }
+      appsecJobId = data.job_id;
+      appsecPollInterval = setInterval(pollAppsec, 3000);
+    })
+    .catch(err => showAlert("Failed to start scan: " + err, "error"));
+}
+
+function pollAppsec() {
+  if (!appsecJobId) return;
+  fetch("/api/appsec/status/" + appsecJobId)
+    .then(r => r.json())
+    .then(data => {
+      updateAppsecProgress(data.progress || 0, data.progress_log || []);
+      if (data.status === "completed") {
+        clearInterval(appsecPollInterval);
+        fetchAppsecResults();
+      } else if (data.status === "failed") {
+        clearInterval(appsecPollInterval);
+        showAlert("Assessment failed: " + (data.error || "Unknown error"), "error");
+        resetAppsecUI();
+      }
+    })
+    .catch(() => {});
+}
+
+function fetchAppsecResults() {
+  fetch("/api/appsec/results/" + appsecJobId)
+    .then(r => r.json())
+    .then(results => {
+      document.getElementById("appsec-progress-card").classList.add("hidden");
+      document.getElementById("appsec-config-card").classList.remove("hidden");
+      document.getElementById("appsec-results-panel").classList.remove("hidden");
+      renderAppsecResults(results);
+    })
+    .catch(err => showAlert("Failed to fetch results: " + err, "error"));
+}
+
+function updateAppsecProgress(pct, logs) {
+  document.getElementById("appsec-progress-bar").style.width = pct + "%";
+  document.getElementById("appsec-progress-pct").textContent = pct + "%";
+  if (logs && logs.length > 0) {
+    const terminal = document.getElementById("appsec-terminal");
+    const existing = new Set(Array.from(terminal.querySelectorAll(".terminal-line")).map(el => el.textContent));
+    logs.forEach(entry => {
+      const text = "[" + (entry.level || "INFO") + "] " + entry.message;
+      if (!existing.has(text)) {
+        const line = document.createElement("div");
+        line.className = "terminal-line terminal-line--" + (entry.level || "INFO").toLowerCase();
+        line.textContent = text;
+        terminal.appendChild(line);
+        existing.add(text);
+      }
+    });
+    terminal.scrollTop = terminal.scrollHeight;
+  }
+}
+
+function renderAppsecResults(r) {
+  const score = r.risk_score || 0;
+  const circle = document.getElementById("appsec-risk-circle");
+  document.getElementById("appsec-risk-num").textContent = score;
+  circle.className = "risk-score-circle " + getRiskClass(score);
+  document.getElementById("appsec-risk-url").textContent = r.target_url || r.domain || "";
+
+  // Severity pills
+  const counts = r.findings_count || {};
+  const sevRow = document.getElementById("appsec-sev-row");
+  sevRow.innerHTML = ["critical","high","medium","low","info"].map(s =>
+    counts[s] ? `<span class="appsec-sev-pill ${s}">${counts[s]} ${s.toUpperCase()}</span>` : ""
+  ).join("");
+
+  // Update header badges
+  document.getElementById("appsec-crit-count").textContent = (counts.critical || 0) + " CRITICAL";
+  document.getElementById("appsec-high-count").textContent = (counts.high || 0) + " HIGH";
+  document.getElementById("appsec-med-count").textContent = (counts.medium || 0) + " MEDIUM";
+  document.getElementById("appsec-low-count").textContent = (counts.low || 0) + " LOW";
+
+  // Executive summary
+  const summaryEl = document.getElementById("appsec-summary-text");
+  const summary = r.executive_summary || "";
+  summaryEl.innerHTML = summary
+    .split("\n\n").map(p => `<p>${p}</p>`).join("")
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+
+  // Findings
+  const findings = r.findings || [];
+  const list = document.getElementById("appsec-findings-list");
+
+  if (findings.length === 0) {
+    list.innerHTML = '<div class="empty-state" style="padding:2rem;">No findings generated.</div>';
+    return;
+  }
+
+  // Sort by severity weight
+  const sevOrder = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, INFO: 4 };
+  findings.sort((a, b) => (sevOrder[a.severity] ?? 5) - (sevOrder[b.severity] ?? 5));
+
+  list.innerHTML = findings.map((f, idx) => `
+    <div class="appsec-finding" id="finding-${idx}">
+      <div class="appsec-finding-header" onclick="toggleFinding(${idx})">
+        <span class="appsec-finding-num">#${String(idx + 1).padStart(2, '0')}</span>
+        <span class="finding-badge ${(f.severity || 'INFO').toLowerCase()}">${f.severity || 'INFO'}</span>
+        <span class="appsec-finding-cat">${escapeHtml(f.category || 'Unknown')}</span>
+        <span class="affected-url-chip">${escapeHtml((f.affected_url || '').replace(/^https?:\/\//, '').substring(0, 55))}${(f.affected_url || '').length > 60 ? '…' : ''}</span>
+        <span class="appsec-finding-toggle">▾</span>
+      </div>
+      <div class="appsec-finding-body">
+        <div class="appsec-field">
+          <div class="appsec-field-label">Affected URL / Service</div>
+          <div class="appsec-field-value"><code>${escapeHtml(f.affected_url || '—')}</code></div>
+        </div>
+        <div class="appsec-field">
+          <div class="appsec-field-label">Observations</div>
+          <div class="appsec-field-value">${escapeHtml(f.observations || '—')}</div>
+        </div>
+        <div class="appsec-field-grid">
+          <div class="appsec-field">
+            <div class="appsec-field-label">Business Risk</div>
+            <div class="appsec-field-value">${escapeHtml(f.business_risk || '—')}</div>
+          </div>
+          <div class="appsec-field">
+            <div class="appsec-field-label">Technical Impact</div>
+            <div class="appsec-field-value">${escapeHtml(f.impact || '—')}</div>
+          </div>
+        </div>
+        <div class="appsec-field">
+          <div class="appsec-field-label">Recommendations</div>
+          <div class="appsec-field-value">${escapeHtml(f.recommendations || '—')}</div>
+        </div>
+        <div class="appsec-field-grid">
+          <div class="appsec-field">
+            <div class="appsec-field-label">Industry Standards Mapping</div>
+            <div class="appsec-field-value">${escapeHtml(f.standards_mapping || '—')}</div>
+          </div>
+          <div class="appsec-field">
+            <div class="appsec-field-label">CWE Mapping</div>
+            <div class="appsec-field-value"><code>${escapeHtml(f.cwe_mapping || '—')}</code></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `).join("");
+
+  // Auto-expand first critical/high finding
+  const firstEl = document.getElementById("finding-0");
+  if (firstEl) firstEl.classList.add("expanded");
+}
+
+function toggleFinding(idx) {
+  document.getElementById("finding-" + idx).classList.toggle("expanded");
+}
+
+function getRiskClass(score) {
+  if (score >= 75) return "critical";
+  if (score >= 50) return "high";
+  if (score >= 25) return "medium";
+  return "low";
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function downloadAppSecReport() {
+  if (appsecJobId) window.open("/api/report/" + appsecJobId, "_blank");
+}
+
+function resetAppSec() {
+  appsecJobId = null;
+  document.getElementById("appsec-config-card").classList.remove("hidden");
+  document.getElementById("appsec-results-panel").classList.add("hidden");
+  document.getElementById("appsec-terminal").innerHTML = '<div class="terminal-line">[PHANTOM AI] Initializing application security assessment...</div>';
+  document.getElementById("appsec-progress-bar").style.width = "0%";
+  document.getElementById("appsec-progress-pct").textContent = "0%";
+}
+
+function resetAppsecUI() {
+  document.getElementById("appsec-config-card").classList.remove("hidden");
+  document.getElementById("appsec-progress-card").classList.add("hidden");
+}
+
+function showAlert(msg, type) {
+  const div = document.createElement("div");
+  div.className = "flash flash-" + type;
+  div.textContent = msg;
+  document.querySelector(".main-content").prepend(div);
+  setTimeout(() => div.remove(), 5000);
+}
+</script>
+{% endblock %}
