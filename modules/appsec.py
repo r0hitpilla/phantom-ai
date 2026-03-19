@@ -348,7 +348,7 @@ class AppSecScanner:
         self._log("Phase 3: Calculating risk score...")
         self.progress = 85
         sev_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-        for f in findings:
+        for f in all_findings:
             sev = f.get("severity", "INFO").lower()
             if sev in sev_counts:
                 sev_counts[sev] += 1
