@@ -37,18 +37,22 @@ def _conn():
     return c
 
 
+def _existing_columns(db, table: str) -> set:
+    return {r[1] for r in db.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
 def init_db():
     with _conn() as db:
-        # Core users table — PII encrypted at rest
+        # ── Create tables (no UNIQUE on email_hash yet — added after migration) ──
         db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id            TEXT PRIMARY KEY,
-                email_enc     TEXT NOT NULL,          -- Fernet-encrypted email
-                email_hash    TEXT UNIQUE NOT NULL,   -- HMAC hash for lookups
-                name_enc      TEXT,                   -- Fernet-encrypted display name
+                email_enc     TEXT NOT NULL DEFAULT '',
+                email_hash    TEXT DEFAULT '',
+                name_enc      TEXT,
                 provider      TEXT NOT NULL DEFAULT 'email',
-                password_hash TEXT,                   -- Werkzeug PBKDF2
-                google_sub    TEXT UNIQUE,
+                password_hash TEXT,
+                google_sub    TEXT,
                 role          TEXT NOT NULL DEFAULT 'user',
                 is_active     INTEGER NOT NULL DEFAULT 1,
                 locked_until  TEXT,
@@ -56,8 +60,6 @@ def init_db():
                 created_at    TEXT NOT NULL
             )
         """)
-
-        # Login attempts for brute-force detection / account lockout
         db.execute("""
             CREATE TABLE IF NOT EXISTS login_attempts (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,8 +69,6 @@ def init_db():
                 ts         TEXT NOT NULL
             )
         """)
-
-        # Immutable audit log
         db.execute("""
             CREATE TABLE IF NOT EXISTS audit_log (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,8 +80,37 @@ def init_db():
             )
         """)
 
+        # ── Add missing columns to existing tables (safe to run repeatedly) ──
+        cols = _existing_columns(db, "users")
+        new_cols = {
+            "email_enc":    "TEXT NOT NULL DEFAULT ''",
+            "email_hash":   "TEXT DEFAULT ''",
+            "name_enc":     "TEXT",
+            "is_active":    "INTEGER NOT NULL DEFAULT 1",
+            "locked_until": "TEXT",
+            "last_login":   "TEXT",
+        }
+        for col, col_def in new_cols.items():
+            if col not in cols:
+                db.execute(f"ALTER TABLE users ADD COLUMN {col} {col_def}")
+
         db.execute("CREATE INDEX IF NOT EXISTS idx_attempts_hash_ts ON login_attempts(email_hash, ts)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id)")
+        db.commit()
+
+    # Populate encrypted columns from legacy plain-text data, then create unique index
+    migrate_legacy_rows()
+
+    with _conn() as db:
+        # Create unique index only after migration (so no duplicate empty values)
+        try:
+            db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_hash ON users(email_hash) WHERE email_hash != ''")
+        except Exception:
+            pass  # index may already exist or SQLite version doesn't support partial indexes
+        try:
+            db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub ON users(google_sub) WHERE google_sub IS NOT NULL")
+        except Exception:
+            pass
         db.commit()
 
 
@@ -183,6 +212,11 @@ def get_by_email(email: str) -> dict | None:
     h = hash_for_lookup(email.lower().strip())
     with _conn() as db:
         row = _row(db, "SELECT * FROM users WHERE email_hash = ?", h)
+        # Fallback: legacy rows still have plain email column
+        if not row:
+            cols = _existing_columns(db, "users")
+            if "email" in cols:
+                row = _row(db, "SELECT * FROM users WHERE LOWER(email) = ?", email.lower().strip())
     return _decrypt_user(row)
 
 
@@ -365,20 +399,26 @@ def deactivate_user(user_id: str, by_admin_id: str | None = None):
 
 def migrate_legacy_rows():
     """
-    One-time migration: rows that still have a plain-text email in the old
-    `email` column (if any) are encrypted in-place. Safe to call multiple
-    times — skips already-migrated rows.
+    Migrate rows that still store plain-text email/name from the old schema.
+    Safe to call multiple times — skips rows that are already migrated.
     """
     try:
         with _conn() as db:
-            # Check if the old `email` column still exists
-            cols = [r[1] for r in db.execute("PRAGMA table_info(users)").fetchall()]
-            if "email" not in cols:
-                return
-            rows = db.execute("SELECT id, email, name FROM users WHERE email_hash IS NULL OR email_hash = ''").fetchall()
+            cols = _existing_columns(db, "users")
+            has_old_email = "email" in cols
+            has_old_name = "name" in cols
+
+            if not has_old_email:
+                return  # Nothing to migrate
+
+            # Only migrate rows where email_hash is still blank
+            rows = db.execute(
+                "SELECT id, email, name FROM users WHERE COALESCE(email_hash, '') = ''"
+            ).fetchall()
+
             for r in rows:
-                plain_email = r["email"] or ""
-                plain_name = r["name"] or ""
+                plain_email = (r["email"] if has_old_email else "") or ""
+                plain_name = (r["name"] if has_old_name else "") or ""
                 db.execute(
                     "UPDATE users SET email_enc=?, email_hash=?, name_enc=? WHERE id=?",
                     (
@@ -388,6 +428,9 @@ def migrate_legacy_rows():
                         r["id"],
                     ),
                 )
+
+            if rows:
+                print(f"[auth_db] Migrated {len(rows)} legacy user rows to encrypted schema")
             db.commit()
     except Exception as e:
         print(f"[auth_db] migration warning: {e}")
@@ -396,6 +439,5 @@ def migrate_legacy_rows():
 # Initialize DB on import
 try:
     init_db()
-    migrate_legacy_rows()
 except Exception as e:
     print(f"[auth_db] DB init warning: {e}")

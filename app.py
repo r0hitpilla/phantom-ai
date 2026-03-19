@@ -1480,6 +1480,8 @@ def scheduler_cancel(sched_id):
 
 @app.errorhandler(404)
 def not_found(e):
+    if request.is_json or request.path.startswith("/api/"):
+        return jsonify({"error": "Not found"}), 404
     return render_template("404.html") if os.path.exists("templates/404.html") else (
         jsonify({"error": "Not found"}), 404
     )
@@ -1488,7 +1490,11 @@ def not_found(e):
 @app.errorhandler(500)
 def server_error(e):
     traceback.print_exc()
-    return jsonify({"error": "Internal server error"}), 500
+    if request.is_json or request.path.startswith("/api/"):
+        return jsonify({"error": "Internal server error"}), 500
+    # For page requests, redirect to login with a flash message
+    flash("Something went wrong. Please try again.", "error")
+    return redirect(url_for("login")), 302
 
 
 # ---------------------------------------------------------------------------
