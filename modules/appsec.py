@@ -468,7 +468,7 @@ Critical rules:
 4. For categories you cannot directly observe (SQL injection, CSRF, etc.) — state "Inferred from tech stack" and provide risk assessment based on the detected framework/CMS
 5. Assign severity accurately: CRITICAL=exploitable with immediate high-impact, HIGH=significant risk, MEDIUM=moderate, LOW=minor, INFO=informational
 6. Generate at least {num_findings} findings
-7. Make recommendations specific — not "use parameterized queries" but "replace db.query(f'SELECT...{req.param}') with db.execute('SELECT...?', [req.param])"
+7. Make recommendations specific — not "use parameterized queries" but "replace db.query(f'SELECT...{{req.param}}') with db.execute('SELECT...?', [req.param])"
 
 Respond with ONLY a valid JSON array. No markdown code blocks, no explanation, no text before or after the array.
 """
