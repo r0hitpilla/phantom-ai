@@ -77,7 +77,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SECURE=IS_PRODUCTION,   # HTTPS-only in production
     SESSION_COOKIE_SAMESITE="Lax",
-    PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+    PERMANENT_SESSION_LIFETIME=timedelta(minutes=15),
 )
 
 # ---------------------------------------------------------------------------
@@ -112,7 +112,7 @@ def enforce_session_timeout():
     if session.get("logged_in") and session.get("login_time"):
         try:
             login_time = datetime.fromisoformat(session["login_time"])
-            if datetime.utcnow() - login_time > timedelta(hours=8):
+            if datetime.utcnow() - login_time > timedelta(minutes=15):
                 session.clear()
                 flash("Your session has expired. Please log in again.", "info")
                 return redirect(url_for("login"))
@@ -1492,7 +1492,8 @@ def server_error(e):
     traceback.print_exc()
     if request.is_json or request.path.startswith("/api/"):
         return jsonify({"error": "Internal server error"}), 500
-    # For page requests, redirect to login with a flash message
+    # Clear session before redirecting so login doesn't loop back to the broken page
+    session.clear()
     flash("Something went wrong. Please try again.", "error")
     return redirect(url_for("login")), 302
 
