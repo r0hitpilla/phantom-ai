@@ -832,7 +832,7 @@ def generate_report(job_id):
             or "See detailed results for full findings."
         )
         # Sanitize text for PDF (remove markdown)
-        findings_clean = _sanitize_for_pdf(str(findings_text))
+        findings_clean = _sanitize_for_pdf(str(findings_text), max_len=3000)
         pdf.multi_cell(0, 5, findings_clean)
 
         pdf.ln(6)
@@ -965,22 +965,59 @@ def server_error(e):
 # Helper functions
 # ---------------------------------------------------------------------------
 
-def _sanitize_for_pdf(text: str) -> str:
-    """Remove markdown and non-latin characters for PDF rendering."""
+def _sanitize_for_pdf(text: str, max_len: int = 0) -> str:
+    """Remove markdown and replace Unicode with ASCII-safe equivalents for fpdf Helvetica."""
     import re
+    # Strip markdown
     text = re.sub(r"#{1,6}\s*", "", text)
     text = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", text)
     text = re.sub(r"`{1,3}[^`]*`{1,3}", "", text)
     text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", text)
-    # Replace non-latin1 characters with closest ASCII equivalent or space
+
+    # Replace common Unicode punctuation with ASCII equivalents
+    replacements = {
+        "\u2014": "-",   # em dash —
+        "\u2013": "-",   # en dash –
+        "\u2012": "-",   # figure dash
+        "\u2015": "-",   # horizontal bar
+        "\u2018": "'",   # left single quote '
+        "\u2019": "'",   # right single quote '
+        "\u201a": ",",   # single low quote ‚
+        "\u201c": '"',   # left double quote "
+        "\u201d": '"',   # right double quote "
+        "\u201e": '"',   # double low quote „
+        "\u2022": "-",   # bullet •
+        "\u2023": "-",   # triangular bullet ‣
+        "\u2026": "...", # ellipsis …
+        "\u00b7": "*",   # middle dot ·
+        "\u2192": "->",  # right arrow →
+        "\u2190": "<-",  # left arrow ←
+        "\u00a0": " ",   # non-breaking space
+        "\u00ae": "(R)", # registered ®
+        "\u00a9": "(C)", # copyright ©
+        "\u00b0": " deg",# degree °
+        "\u2264": "<=",  # less-than or equal ≤
+        "\u2265": ">=",  # greater-than or equal ≥
+    }
+    for uni, ascii_equiv in replacements.items():
+        text = text.replace(uni, ascii_equiv)
+
+    # Drop any remaining characters outside Windows-1252 range
     result = []
     for char in text:
-        try:
-            char.encode("latin-1")
+        cp = ord(char)
+        # Keep printable ASCII (32-126) + extended latin (160-255) used by Helvetica
+        if (32 <= cp <= 126) or (160 <= cp <= 255):
             result.append(char)
-        except UnicodeEncodeError:
+        elif char in ("\n", "\r", "\t"):
+            result.append(char)
+        else:
             result.append(" ")
-    return "".join(result)[:3000]  # Limit length
+
+    text = "".join(result)
+    if max_len:
+        text = text[:max_len]
+    return text
 
 
 def _extract_stats_for_pdf(results: dict, module: str) -> list:
