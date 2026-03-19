@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}User Management{% endblock %}
+{% block breadcrumb %}<span>System</span> <span class="bc-sep">›</span> <span class="bc-active">Users</span>{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div class="page-header-icon medium">◎</div>
+  <div class="page-header-text">
+    <h1 class="page-title">User Management</h1>
+    <p class="page-desc">All registered accounts. Promote users to admin or revoke access.</p>
+  </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}{% for cat, msg in messages %}<div class="flash flash-{{ cat }}">{{ msg }}</div>{% endfor %}{% endif %}
+{% endwith %}
+
+<div class="table-card">
+  {% if users %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Email</th>
+        <th>Provider</th>
+        <th>Role</th>
+        <th>Joined</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td>{{ u.name or "—" }}</td>
+        <td><code class="job-id">{{ u.email }}</code></td>
+        <td>
+          {% if u.provider == "google" %}
+            <span class="module-tag" style="background:rgba(66,133,244,0.1);color:#4285F4;border-color:rgba(66,133,244,0.2);">Google</span>
+          {% else %}
+            <span class="module-tag">Email</span>
+          {% endif %}
+        </td>
+        <td>
+          <span class="risk-score-pill {% if u.role == 'admin' %}critical{% else %}low{% endif %}">
+            {{ u.role.upper() }}
+          </span>
+        </td>
+        <td><span class="timestamp">{{ u.created_at[:10] }}</span></td>
+        <td style="display:flex;gap:0.4rem;">
+          {% if u.id != current_user.id %}
+            {% if u.role == "user" %}
+              <form method="POST" action="/admin/users/{{ u.id }}/role" style="display:inline;">
+                <input type="hidden" name="role" value="admin" />
+                <button type="submit" class="btn-micro" style="background:rgba(255,62,62,0.1);color:#FF3E3E;border-color:rgba(255,62,62,0.2);">Make Admin</button>
+              </form>
+            {% else %}
+              <form method="POST" action="/admin/users/{{ u.id }}/role" style="display:inline;">
+                <input type="hidden" name="role" value="user" />
+                <button type="submit" class="btn-micro">Revoke Admin</button>
+              </form>
+            {% endif %}
+            <form method="POST" action="/admin/users/{{ u.id }}/delete" style="display:inline;"
+              onsubmit="return confirm('Delete {{ u.email }}?')">
+              <button type="submit" class="btn-micro" style="background:rgba(255,62,62,0.08);color:#FF3E3E;border-color:rgba(255,62,62,0.2);">Delete</button>
+            </form>
+          {% else %}
+            <span class="text-muted" style="font-size:0.78rem;">You</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state" style="padding:3rem;">
+    <div class="empty-icon">◎</div>
+    <div class="empty-title">No registered users yet</div>
+    <div class="empty-desc">Users will appear here after signing up.</div>
+  </div>
+  {% endif %}
+</div>
+
+<div class="card" style="margin-top:1.5rem;">
+  <div class="card-header"><h2 class="card-title">Admin Email Configuration</h2></div>
+  <div class="card-body">
+    <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:0.8rem;">
+      Users whose email matches <code>ADMIN_EMAILS</code> are automatically granted admin role on login.
+    </p>
+    <div style="font-family:'DM Mono',monospace;font-size:0.8rem;color:var(--text-accent);background:rgba(0,0,0,0.3);padding:0.8rem 1rem;border-radius:6px;">
+      ADMIN_EMAILS = {{ admin_emails or "(not set — set in Railway environment variables)" }}
+    </div>
+  </div>
+</div>
+
+{% endblock %}

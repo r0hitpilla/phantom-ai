@@ -26,8 +26,14 @@ from flask import (
 )
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from authlib.integrations.flask_client import OAuth
 from config import SECRET_KEY
 from modules.appsec import AppSecScanner
+from utils.auth_db import (
+    all_users, check_password, delete_user, get_by_email,
+    get_by_id, login_email_user, register_email_user, update_role,
+    upsert_google_user,
+)
 from utils.emailer import notifier
 from modules.cognitive import CognitiveProfiler
 from modules.deepfake import DeepfakeSimulator
@@ -41,6 +47,27 @@ from modules.supply_chain import SupplyChainScanner
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
+
+# ---------------------------------------------------------------------------
+# Google OAuth setup
+# ---------------------------------------------------------------------------
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_ENABLED = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
+
+oauth = OAuth(app)
+if GOOGLE_ENABLED:
+    oauth.register(
+        name="google",
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+        client_kwargs={"scope": "openid email profile"},
+    )
+
+# ---------------------------------------------------------------------------
+# Global stores
+# ---------------------------------------------------------------------------
 
 # Global job store: {job_id: {status, progress, module, results, created_at}}
 jobs = {}
@@ -90,6 +117,51 @@ def authorization_required(f):
     return decorated
 
 
+def admin_required(f):
+    """Decorator that restricts route to admin-role users only."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("logged_in"):
+            return redirect(url_for("login"))
+        # Legacy admin session (username/password with no user_id)
+        if not session.get("user_id") and session.get("username") == PHANTOM_USERNAME:
+            return f(*args, **kwargs)
+        # New user system: check role
+        if session.get("role") == "admin":
+            return f(*args, **kwargs)
+        # Block non-admin
+        if request.is_json or request.path.startswith("/api/"):
+            return jsonify({
+                "error": "Admin access required",
+                "message": "Your account does not have permission to run scans.",
+            }), 403
+        return render_template("403.html"), 403
+    return decorated
+
+
+@app.context_processor
+def inject_user_context():
+    """Inject current_user and is_admin into all templates."""
+    user_id = session.get("user_id")
+    if user_id:
+        user = get_by_id(user_id)
+        if user:
+            return {"current_user": user, "is_admin": user["role"] == "admin"}
+    # Legacy admin session
+    if session.get("logged_in") and not session.get("user_id"):
+        return {
+            "current_user": {
+                "id": "legacy",
+                "email": session.get("username", "admin"),
+                "name": "Admin",
+                "role": "admin",
+                "provider": "password",
+            },
+            "is_admin": True,
+        }
+    return {"current_user": None, "is_admin": False}
+
+
 # ---------------------------------------------------------------------------
 # Email notification helper
 # ---------------------------------------------------------------------------
@@ -126,22 +198,105 @@ def index():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    if session.get("logged_in"):
+        return redirect(url_for("dashboard"))
     if request.method == "POST":
-        username = request.form.get("username", "")
+        username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
+
+        # Legacy admin login
         if username == PHANTOM_USERNAME and password == PHANTOM_PASSWORD:
             session["logged_in"] = True
             session["username"] = username
             session["login_time"] = datetime.utcnow().isoformat()
             return redirect(url_for("dashboard"))
+
+        # Email/password login via user DB
+        user = login_email_user(username, password)
+        if user:
+            _set_user_session(user)
+            return redirect(url_for("dashboard"))
+
         flash("Invalid credentials. Please try again.", "error")
-    return render_template("login.html")
+
+    return render_template("login.html", google_enabled=GOOGLE_ENABLED)
+
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    if session.get("logged_in"):
+        return redirect(url_for("dashboard"))
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        email = request.form.get("email", "").strip()
+        password = request.form.get("password", "")
+        confirm = request.form.get("confirm_password", "")
+
+        if not name or not email or not password:
+            flash("All fields are required.", "error")
+        elif len(password) < 8:
+            flash("Password must be at least 8 characters.", "error")
+        elif password != confirm:
+            flash("Passwords do not match.", "error")
+        else:
+            try:
+                user = register_email_user(email, name, password)
+                _set_user_session(user)
+                flash(
+                    f"Welcome, {name}! Your account has been created."
+                    + (" You have admin access." if user["role"] == "admin" else " You have read-only access."),
+                    "success" if user["role"] == "admin" else "info",
+                )
+                return redirect(url_for("dashboard"))
+            except ValueError as e:
+                flash(str(e), "error")
+
+    return render_template("register.html", google_enabled=GOOGLE_ENABLED)
+
+
+@app.route("/auth/google")
+def google_login():
+    if not GOOGLE_ENABLED:
+        flash("Google OAuth is not configured.", "error")
+        return redirect(url_for("login"))
+    redirect_uri = url_for("google_callback", _external=True)
+    return oauth.google.authorize_redirect(redirect_uri)
+
+
+@app.route("/auth/google/callback")
+def google_callback():
+    if not GOOGLE_ENABLED:
+        return redirect(url_for("login"))
+    try:
+        token = oauth.google.authorize_access_token()
+        user_info = token.get("userinfo") or {}
+        email = user_info.get("email", "")
+        name = user_info.get("name", email)
+        sub = user_info.get("sub", "")
+        if not email:
+            flash("Google login failed — no email returned.", "error")
+            return redirect(url_for("login"))
+        user = upsert_google_user(email, name, sub)
+        _set_user_session(user)
+        return redirect(url_for("dashboard"))
+    except Exception as exc:
+        traceback.print_exc()
+        flash(f"Google login failed: {exc}", "error")
+        return redirect(url_for("login"))
 
 
 @app.route("/logout")
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
+
+def _set_user_session(user: dict):
+    session["logged_in"] = True
+    session["user_id"] = user["id"]
+    session["username"] = user["email"]
+    session["role"] = user["role"]
+    session["login_time"] = datetime.utcnow().isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +355,7 @@ def module_scanner():
 
 @app.route("/api/scanner/start", methods=["POST"])
 @login_required
+@admin_required
 @authorization_required
 def scanner_start():
     data = request.get_json(silent=True) or {}
@@ -289,6 +445,7 @@ def module_deepfake():
 
 @app.route("/api/deepfake/generate", methods=["POST"])
 @login_required
+@admin_required
 @authorization_required
 def deepfake_generate():
     data = request.get_json(silent=True) or {}
@@ -369,6 +526,7 @@ def deepfake_generate():
 
 @app.route("/api/deepfake/campaign", methods=["POST"])
 @login_required
+@admin_required
 @authorization_required
 def deepfake_campaign():
     data = request.get_json(silent=True) or {}
@@ -439,6 +597,7 @@ def module_redteam():
 
 @app.route("/api/redteam/start", methods=["POST"])
 @login_required
+@admin_required
 @authorization_required
 def redteam_start():
     data = request.get_json(silent=True) or {}
@@ -534,6 +693,7 @@ def module_supplychain():
 
 @app.route("/api/supplychain/scan", methods=["POST"])
 @login_required
+@admin_required
 @authorization_required
 def supplychain_scan():
     data = request.get_json(silent=True) or {}
@@ -624,6 +784,7 @@ def module_cognitive():
 
 @app.route("/api/cognitive/profile", methods=["POST"])
 @login_required
+@admin_required
 @authorization_required
 def cognitive_profile():
     data = request.get_json(silent=True) or {}
@@ -717,6 +878,7 @@ def module_appsec():
 
 @app.route("/api/appsec/start", methods=["POST"])
 @login_required
+@admin_required
 @authorization_required
 def appsec_start():
     data = request.get_json(silent=True) or {}
@@ -972,6 +1134,47 @@ def job_queue():
 
 
 # ---------------------------------------------------------------------------
+# Admin — User Management
+# ---------------------------------------------------------------------------
+
+@app.route("/admin/users")
+@login_required
+@admin_required
+def admin_users():
+    return render_template(
+        "users.html",
+        users=all_users(),
+        admin_emails=os.environ.get("ADMIN_EMAILS", ""),
+    )
+
+
+@app.route("/admin/users/<user_id>/role", methods=["POST"])
+@login_required
+@admin_required
+def admin_set_role(user_id):
+    role = request.form.get("role", "user")
+    if role not in ("admin", "user"):
+        flash("Invalid role.", "error")
+    else:
+        update_role(user_id, role)
+        flash(f"Role updated to {role}.", "success")
+    return redirect(url_for("admin_users"))
+
+
+@app.route("/admin/users/<user_id>/delete", methods=["POST"])
+@login_required
+@admin_required
+def admin_delete_user(user_id):
+    current_uid = session.get("user_id")
+    if user_id == current_uid:
+        flash("You cannot delete your own account.", "error")
+    else:
+        delete_user(user_id)
+        flash("User deleted.", "success")
+    return redirect(url_for("admin_users"))
+
+
+# ---------------------------------------------------------------------------
 # API — Job listing
 # ---------------------------------------------------------------------------
 
@@ -1085,6 +1288,7 @@ def scheduler_page():
 
 @app.route("/api/scheduler/create", methods=["POST"])
 @login_required
+@admin_required
 def scheduler_create():
     data = request.get_json(silent=True) or {}
     module = data.get("module", "").strip()

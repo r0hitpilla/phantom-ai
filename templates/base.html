@@ -79,6 +79,12 @@
         <span class="nav-icon">⏱</span>
         <span class="nav-label">Scheduler</span>
       </a>
+      {% if is_admin %}
+      <a href="/admin/users" class="nav-item {% if request.endpoint == 'admin_users' %}active{% endif %}">
+        <span class="nav-icon">◎</span>
+        <span class="nav-label">Users</span>
+      </a>
+      {% endif %}
       <a href="/logout" class="nav-item nav-logout">
         <span class="nav-icon">⏻</span>
         <span class="nav-label">Logout</span>
@@ -111,7 +117,13 @@
         </div>
         <div class="topbar-stat">
           <span class="stat-label">User</span>
-          <span class="stat-value">{{ session.get('username', 'admin') }}</span>
+          <span class="stat-value">{{ current_user.name or current_user.email if current_user else session.get('username','admin') }}</span>
+        </div>
+        <div class="topbar-stat">
+          <span class="stat-label">Role</span>
+          <span class="stat-value {% if is_admin %}text-critical{% else %}text-cyan{% endif %}">
+            {{ 'ADMIN' if is_admin else 'USER' }}
+          </span>
         </div>
         <div class="threat-indicator">
           <span class="threat-label">Threat Level</span>

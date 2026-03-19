@@ -7,6 +7,23 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="{{ url_for('static', filename='phantom.css') }}" />
+  <style>
+    .login-divider { display:flex;align-items:center;gap:0.8rem;margin:1.2rem 0;color:#333;font-size:0.75rem;letter-spacing:1px; }
+    .login-divider::before,.login-divider::after { content:'';flex:1;height:1px;background:rgba(255,255,255,0.07); }
+    .btn-google {
+      display:flex;align-items:center;justify-content:center;gap:0.7rem;
+      width:100%;padding:0.8rem 1rem;border-radius:8px;
+      background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.12);
+      color:#e8eaed;font-size:0.92rem;font-weight:500;cursor:pointer;
+      text-decoration:none;transition:all 0.15s;letter-spacing:0.2px;
+    }
+    .btn-google:hover { background:rgba(255,255,255,0.08);border-color:rgba(255,255,255,0.2); }
+    .btn-google svg { flex-shrink:0; }
+    .register-link { text-align:center;margin-top:1.2rem;font-size:0.82rem;color:#444; }
+    .register-link a { color:var(--text-accent,#00D4FF);text-decoration:none; }
+    .register-link a:hover { text-decoration:underline; }
+    .role-note { text-align:center;font-size:0.72rem;color:#333;margin-top:0.5rem;line-height:1.5; }
+  </style>
 </head>
 <body class="login-page">
 
@@ -33,31 +50,28 @@
       {% endif %}
     {% endwith %}
 
+    {% if google_enabled %}
+    <!-- Google Sign-In -->
+    <a href="/auth/google" class="btn-google">
+      <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/></svg>
+      Continue with Google
+    </a>
+    <div class="role-note">Google login — admin access for approved emails only</div>
+
+    <div class="login-divider">OR</div>
+    {% endif %}
+
+    <!-- Email / Password -->
     <form method="POST" action="/login" class="login-form">
       <div class="form-group">
-        <label class="form-label" for="username">Username</label>
-        <input
-          type="text"
-          id="username"
-          name="username"
-          class="form-input"
-          placeholder="Enter username"
-          value="admin"
-          required
-          autocomplete="username"
-        />
+        <label class="form-label" for="username">Email or Username</label>
+        <input type="text" id="username" name="username" class="form-input"
+          placeholder="admin or email@example.com" required autocomplete="username" />
       </div>
       <div class="form-group">
         <label class="form-label" for="password">Password</label>
-        <input
-          type="password"
-          id="password"
-          name="password"
-          class="form-input"
-          placeholder="Enter password"
-          required
-          autocomplete="current-password"
-        />
+        <input type="password" id="password" name="password" class="form-input"
+          placeholder="Enter password" required autocomplete="current-password" />
       </div>
       <button type="submit" class="btn btn-primary btn-block btn-scan">
         <span class="btn-scan-text">ACCESS PLATFORM</span>
@@ -65,10 +79,10 @@
       </button>
     </form>
 
-    <div class="login-footer">
-      <p>Default credentials: <code>admin</code> / <code>phantom2024</code></p>
-      <p>Set <code>PHANTOM_PASSWORD</code> env var to change password.</p>
+    <div class="register-link">
+      Don't have an account? <a href="/register">Create free account</a>
     </div>
+
   </div>
 </div>
 

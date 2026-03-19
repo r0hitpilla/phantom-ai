@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Access Denied{% endblock %}
+{% block content %}
+<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;text-align:center;padding:2rem;">
+  <div style="font-size:4rem;color:#FF3E3E;margin-bottom:1rem;">⊘</div>
+  <h1 style="font-size:1.8rem;color:#FF3E3E;margin-bottom:0.5rem;">Access Denied</h1>
+  <p style="color:var(--text-muted);max-width:420px;line-height:1.7;margin-bottom:2rem;">
+    Your account does not have permission to run security scans.<br/>
+    Only <strong style="color:var(--text-primary);">Admin</strong> accounts can execute assessments.<br/>
+    You can still view the dashboard, job history, and download existing reports.
+  </p>
+  <div style="display:flex;gap:1rem;flex-wrap:wrap;justify-content:center;">
+    <a href="/dashboard" class="btn btn-outline" style="text-decoration:none;">View Dashboard</a>
+    <a href="/jobs" class="btn btn-ghost" style="text-decoration:none;">Job History</a>
+  </div>
+</div>
+{% endblock %}
