@@ -1097,8 +1097,8 @@ def generate_report(job_id):
         from fpdf import FPDF
 
         results = job.get("results", {})
-        module = job.get("module", "Security Assessment")
-        target = job.get("target", "Unknown")
+        module = _sanitize_for_pdf(job.get("module", "Security Assessment"))
+        target = _sanitize_for_pdf(job.get("target", "Unknown"))
         created_at = job.get("created_at", datetime.utcnow().isoformat())
 
         pdf = FPDF()
@@ -1145,13 +1145,14 @@ def generate_report(job_id):
 
         findings_text = (
             results.get("findings_summary")
-            or results.get("findings")
             or results.get("narrative_report")
             or results.get("profiling_report")
             or "See detailed results for full findings."
         )
-        # Sanitize text for PDF (remove markdown)
-        findings_clean = _sanitize_for_pdf(str(findings_text), max_len=3000)
+        # findings may be a list (AppSec) — use summary fields only here
+        if not isinstance(findings_text, str):
+            findings_text = "See detailed findings pages below."
+        findings_clean = _sanitize_for_pdf(findings_text, max_len=3000)
         pdf.multi_cell(0, 5, findings_clean)
 
         pdf.ln(6)
@@ -1163,7 +1164,7 @@ def generate_report(job_id):
 
         stats = _extract_stats_for_pdf(results, module)
         for stat_line in stats:
-            pdf.cell(0, 6, stat_line, new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 6, _sanitize_for_pdf(str(stat_line)), new_x="LMARGIN", new_y="NEXT")
 
         # Footer
         pdf.ln(10)
