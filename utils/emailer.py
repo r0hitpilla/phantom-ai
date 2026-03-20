@@ -158,15 +158,28 @@ class EmailNotifier:
             msg.attach(MIMEText(plain, "plain"))
             msg.attach(MIMEText(html, "html"))
 
-            with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
-                server.ehlo()
-                server.starttls()
-                server.login(self.smtp_user, self.smtp_pass)
-                server.sendmail(self.smtp_user, self.notify_email, msg.as_string())
+            # Try STARTTLS (port 587) first, fall back to SSL (port 465)
+            try:
+                with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
+                    server.ehlo()
+                    server.starttls()
+                    server.login(self.smtp_user, self.smtp_pass)
+                    server.sendmail(self.smtp_user, self.notify_email, msg.as_string())
+            except OSError:
+                # Port 587 blocked (common on Railway) — try SSL on port 465
+                with smtplib.SMTP_SSL(self.smtp_host, 465) as server:
+                    server.login(self.smtp_user, self.smtp_pass)
+                    server.sendmail(self.smtp_user, self.notify_email, msg.as_string())
 
             print(f"[Emailer] Notification sent to {self.notify_email} for job {job_id[:8]}")
             return True
 
+        except OSError as e:
+            print(f"[Emailer] Network unreachable — SMTP blocked by host (job {job_id[:8]}): {e}")
+            return False
+        except smtplib.SMTPException as e:
+            print(f"[Emailer] SMTP error for job {job_id[:8]}: {e}")
+            return False
         except Exception:
             traceback.print_exc()
             return False

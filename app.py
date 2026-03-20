@@ -1113,7 +1113,7 @@ def generate_report(job_id):
 
         pdf.set_font("Helvetica", "B", 14)
         pdf.set_text_color(0, 212, 255)
-        pdf.cell(0, 8, f"Security Assessment Report — {module}", new_x="LMARGIN", new_y="NEXT", align="C")
+        pdf.cell(0, 8, f"Security Assessment Report - {module}", new_x="LMARGIN", new_y="NEXT", align="C")
 
         pdf.ln(4)
         pdf.set_font("Helvetica", "", 10)
@@ -1125,7 +1125,7 @@ def generate_report(job_id):
         pdf.set_fill_color(255, 62, 62)
         pdf.set_text_color(255, 255, 255)
         pdf.set_font("Helvetica", "B", 9)
-        pdf.cell(0, 8, "FOR AUTHORIZED SECURITY TESTING ONLY — CONFIDENTIAL", new_x="LMARGIN", new_y="NEXT", align="C", fill=True)
+        pdf.cell(0, 8, "FOR AUTHORIZED SECURITY TESTING ONLY - CONFIDENTIAL", new_x="LMARGIN", new_y="NEXT", align="C", fill=True)
 
         pdf.ln(6)
         pdf.set_text_color(30, 30, 30)
@@ -1171,7 +1171,7 @@ def generate_report(job_id):
         pdf.set_text_color(130, 130, 130)
         pdf.cell(
             0, 6,
-            "PHANTOM AI — This report is confidential and for authorized security testing use only.",
+            "PHANTOM AI - This report is confidential and for authorized security testing use only.",
             new_x="LMARGIN", new_y="NEXT", align="C"
         )
 
@@ -1198,19 +1198,19 @@ def generate_report(job_id):
                 pdf.set_text_color(255, 255, 255)
                 pdf.set_font("Helvetica", "B", 10)
                 pdf.cell(0, 8,
-                    f"Finding #{i:02d} — {sev} — {_sanitize_for_pdf(finding.get('category', 'Unknown'))}",
+                    f"Finding #{i:02d} - {sev} - {_sanitize_for_pdf(finding.get('category', 'Unknown'))}",
                     new_x="LMARGIN", new_y="NEXT", fill=True
                 )
 
                 pdf.set_text_color(30, 30, 30)
                 fields = [
-                    ("Affected URL / Service", finding.get("affected_url", "—")),
-                    ("Observations", finding.get("observations", "—")),
-                    ("Business Risk", finding.get("business_risk", "—")),
-                    ("Technical Impact", finding.get("impact", "—")),
-                    ("Recommendations", finding.get("recommendations", "—")),
-                    ("Industry Standards Mapping", finding.get("standards_mapping", "—")),
-                    ("CWE Mapping", finding.get("cwe_mapping", "—")),
+                    ("Affected URL / Service", finding.get("affected_url", "N/A")),
+                    ("Observations", finding.get("observations", "N/A")),
+                    ("Business Risk", finding.get("business_risk", "N/A")),
+                    ("Technical Impact", finding.get("impact", "N/A")),
+                    ("Recommendations", finding.get("recommendations", "N/A")),
+                    ("Industry Standards Mapping", finding.get("standards_mapping", "N/A")),
+                    ("CWE Mapping", finding.get("cwe_mapping", "N/A")),
                 ]
                 for label, value in fields:
                     pdf.ln(3)
