@@ -1222,13 +1222,26 @@ def generate_report(job_id):
                     pdf.set_text_color(40, 40, 40)
                     pdf.multi_cell(0, 5, _sanitize_for_pdf(str(value)))
 
-        # Generate PDF bytes
-        pdf_bytes = pdf.output()
+        # Generate PDF bytes — fpdf2 returns bytearray; old fpdf needs dest='S'
+        raw = pdf.output()
+        if raw is None:
+            # Old fpdf v1 fallback
+            import io as _io
+            buf = _io.BytesIO()
+            pdf.output(buf)
+            pdf_bytes = buf.getvalue()
+        else:
+            pdf_bytes = bytes(raw)
+
+        if not pdf_bytes:
+            return jsonify({"error": "PDF generation produced empty output"}), 500
+
         return Response(
             pdf_bytes,
             mimetype="application/pdf",
             headers={
-                "Content-Disposition": f'attachment; filename="phantom-ai-report-{job_id[:8]}.pdf"'
+                "Content-Disposition": f'attachment; filename="phantom-ai-report-{job_id[:8]}.pdf"',
+                "Content-Length": str(len(pdf_bytes)),
             },
         )
 
